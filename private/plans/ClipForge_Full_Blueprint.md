@@ -3,7 +3,7 @@
 > NOTE (2026-08-18): this is the **original planning snapshot** kept for reference.
 > The project has since evolved (web UI in `server.py` + `web/`, cut manifest,
 > raw-clip downscaling, preview endpoint). For the current truth see
-> `Architecture.md` and `Memory.md`.
+> `private/plans/Architecture.md` and `private/sessions/Memory.md`.
 
 ---
 
