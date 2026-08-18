@@ -1,0 +1,16 @@
+# environment / secrets
+.env
+.venv/
+__pycache__/
+*.pyc
+
+# user media & generated data (videos, renders, transcripts, b-roll, music)
+input/
+output/
+music/
+data/
+
+# OS junk
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,42 @@
+{
+  "transcription": {
+    "model": "large-v3",
+    "device": "auto",
+    "compute_type": "auto",
+    "language": null
+  },
+  "llm": {
+    "provider": "ollama",
+    "model": "gemma4:12b",
+    "base_url": "http://localhost:11434",
+    "max_clips": 10,
+    "min_score": 0.5,
+    "chunk_words": 1200,
+    "rules_file": "data/selection_rules.txt"
+  },
+  "context": {
+    "target_platform": "youtube_shorts"
+  },
+  "cutting": {
+    "lead_in_seconds": 0.3,
+    "lead_out_seconds": 0.3,
+    "max_raw_height": 1080,
+    "encode": {
+      "video_codec": "libx264",
+      "audio_codec": "aac",
+      "crf": 18,
+      "preset": "veryfast"
+    }
+  },
+  "default_template": "square_captioned",
+  "paths": {
+    "input": "input",
+    "output": "output",
+    "raw": "output/raw",
+    "music": "music",
+    "broll": "data/broll",
+    "transcripts": "data/transcripts",
+    "context": "data/context",
+    "clip_candidates": "data/clip_candidates"
+  }
+}

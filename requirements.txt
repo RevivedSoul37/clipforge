@@ -1,0 +1,8 @@
+# ClipForge Python dependencies (system deps: ffmpeg + Ollama, installed separately)
+faster-whisper>=1.0.0
+streamlit>=1.32
+
+# Web UI server (server.py)
+starlette>=0.37
+uvicorn>=0.29
+python-multipart>=0.0.9

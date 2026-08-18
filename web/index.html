@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClipForge — AI auto-clipper</title>
+  <link rel="stylesheet" href="/static/style.css?v=6">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">CF</div>
+        <div class="brand-text">
+          <h1>ClipForge</h1>
+          <p class="tagline">Long video in, post-ready clips out</p>
+        </div>
+      </div>
+      <nav class="nav" id="nav">
+        <a href="#/source" data-page="source">Source</a>
+        <a href="#/analyze" data-page="analyze">Analyze</a>
+        <a href="#/review" data-page="review">Review</a>
+        <a href="#/export" data-page="export">Export</a>
+      </nav>
+      <div class="topbar-meta">
+        <span class="chip" id="modelChip">…</span>
+        <span class="status" id="serverStatus"><i></i><span id="serverStatusText">connecting</span></span>
+      </div>
+    </header>
+
+    <main class="main">
+      <!-- ============ SOURCE ============ -->
+      <section class="page" id="page-source">
+        <div class="page-head">
+          <h2>Source video</h2>
+          <p class="page-sub">Upload or pick the long-form video to clip from.</p>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <h3 class="eyebrow">Library</h3>
+            <div class="video-list" id="videoList"></div>
+          </div>
+          <div class="panel">
+            <h3 class="eyebrow">Add a video</h3>
+            <label class="dropzone" id="uploadBtn" for="fileInput">
+              <span class="drop-icon">＋</span>
+              <span class="drop-title">Upload a video</span>
+              <span class="drop-sub">mp4 · mov · mkv · webm — stored in <code>input/</code></span>
+            </label>
+            <input type="file" id="fileInput" accept="video/*" hidden>
+            <div class="upload-progress" id="uploadProgress" hidden>
+              <div class="upload-track"><div class="upload-fill" id="uploadFill"></div></div>
+              <span class="upload-pct" id="uploadPct">0%</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ ANALYZE ============ -->
+      <section class="page" id="page-analyze" hidden>
+        <div class="page-head">
+          <h2>Analyze</h2>
+          <p class="page-sub">Transcribe → context → LLM highlight selection → b-roll cues.</p>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <h3 class="eyebrow">Run settings</h3>
+            <label class="field"><span>Video</span>
+              <div class="select-wrap"><select id="videoSelectA"></select></div>
+            </label>
+            <label class="field"><span>Min score</span>
+              <input type="number" id="minScore" step="0.05" min="0" max="1"></label>
+            <label class="field"><span>Max clips</span>
+              <input type="number" id="maxClips" step="1" min="1" max="30"></label>
+            <button class="btn btn-primary" id="btnAnalyze">Find highlights</button>
+            <p class="hint">Clips under 30s are dropped automatically.</p>
+          </div>
+          <div class="panel">
+            <h3 class="eyebrow">AI selection rules</h3>
+            <textarea id="rulesText" class="rules-input" rows="6"
+              placeholder="Extra instructions for the highlight picker, one per line. Example:&#10;- Prefer moments about discipline and consistency&#10;- Avoid clips that mention brands"></textarea>
+            <div class="rules-actions">
+              <button class="btn btn-small btn-ghost" id="btnSaveRules">Save rules</button>
+              <p class="hint">Applied on the next run.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ REVIEW ============ -->
+      <section class="page" id="page-review" hidden>
+        <div class="page-head">
+          <h2>Review <span class="count" id="reviewCount"></span></h2>
+          <div class="page-actions">
+            <button class="btn btn-small btn-ghost" id="btnApproveAll">Approve all</button>
+            <button class="btn btn-small btn-primary" id="btnSaveReview">Save decisions</button>
+          </div>
+        </div>
+        <div class="review-bar panel">
+          <label class="field"><span>Video</span>
+            <div class="select-wrap"><select id="videoSelectR"></select></div>
+          </label>
+          <p class="hint" id="reviewHint">Decisions stay unsaved until you press Save.</p>
+        </div>
+        <div id="reviewList" class="cards"></div>
+        <div class="empty" id="reviewEmpty" hidden>No candidates yet — run Analyze first.</div>
+      </section>
+
+      <!-- ============ EXPORT ============ -->
+      <section class="page" id="page-export" hidden>
+        <div class="page-head">
+          <h2>Export</h2>
+          <p class="page-sub">Cut + render approved clips with the house style, music and b-roll.</p>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <h3 class="eyebrow">Export settings</h3>
+            <label class="field"><span>Video</span>
+              <div class="select-wrap"><select id="videoSelectE"></select></div>
+            </label>
+            <label class="field"><span>Style</span>
+              <div class="select-wrap"><select id="templateSelect"></select></div>
+            </label>
+            <p class="template-desc" id="templateDesc"></p>
+            <div class="btn-row">
+              <button class="btn btn-primary" id="btnExport">Export approved clips</button>
+              <button class="btn btn-secondary" id="btnRunAll">Run everything (auto)</button>
+            </div>
+          </div>
+          <div class="panel">
+            <h3 class="eyebrow">Sound &amp; b-roll</h3>
+            <label class="toggle-row">
+              <input type="checkbox" id="musicEnabled">
+              <span>Mix background music under the voice</span>
+            </label>
+            <label class="field"><span>Volume</span>
+              <input type="range" id="musicVolume" min="0" max="1" step="0.02"></label>
+            <label class="field-label">Track</label>
+            <div class="select-wrap"><select id="musicTrack"></select></div>
+            <label class="upload upload-small" for="musicInput">
+              <span class="upload-icon">＋</span><span>Add a track</span>
+            </label>
+            <input type="file" id="musicInput" accept="audio/*" hidden>
+            <div class="broll-status" id="brollStatus"></div>
+          </div>
+        </div>
+        <div class="section-head outputs-head">
+          <h3 class="eyebrow">Exported clips <span class="count" id="outputCount"></span></h3>
+          <button class="link" id="btnOpenFolder">Open folder</button>
+        </div>
+        <div id="outputList" class="cards output-cards"></div>
+      </section>
+    </main>
+
+    <footer class="runbar" id="runbar" hidden>
+      <div class="runbar-left">
+        <span class="stage-name" id="stageName">Idle</span>
+        <span class="runbar-msg" id="runMsg"></span>
+      </div>
+      <div class="rail"><div class="rail-fill" id="railFill"></div></div>
+      <span class="percent" id="percent">0%</span>
+      <button class="link cancel-run" id="btnCancel">Cancel</button>
+      <button class="link" id="logToggle">Log</button>
+    </footer>
+    <pre class="log-console" id="logConsole" hidden></pre>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="/static/app.js?v=6"></script>
+</body>
+</html>

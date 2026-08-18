@@ -1,0 +1,58 @@
+{
+  "name": "square_captioned",
+  "description": "9:16 file with the square video as a centered band on black. Bebas Neue hook title in the top black band, bold gradient word captions at the video's bottom edge. The one template for all exports.",
+  "output": {
+    "aspect_ratio": "9:16",
+    "resolution": "1080x1920"
+  },
+  "crop": {
+    "mode": "square_band",
+    "background": "#000000"
+  },
+  "hook": {
+    "enabled": true,
+    "font": "Bebas Neue",
+    "size": 96,
+    "color": "#F1EFD5",
+    "position": "top",
+    "margin_v": 150
+  },
+  "captions": {
+    "enabled": true,
+    "font": "Poppins-Bold",
+    "size": 80,
+    "color": "#F7E94A",
+    "outline_color": "#000000",
+    "outline_width": 5,
+    "position": "bottom_center",
+    "margin_v": 470,
+    "max_words": 4,
+    "gradient": {
+      "enabled": true,
+      "top": "#FFF35C",
+      "bottom": "#FF9A3D"
+    },
+    "highlight_keyword": {
+      "enabled": false
+    }
+  },
+  "music": {
+    "enabled": true,
+    "track": "",
+    "volume": 0.12
+  },
+  "broll": {
+    "enabled": true,
+    "mode": "cutaway",
+    "pip_scale": 0.6
+  },
+  "intro": {
+    "enabled": false
+  },
+  "outro": {
+    "enabled": false
+  },
+  "watermark": {
+    "enabled": false
+  }
+}
