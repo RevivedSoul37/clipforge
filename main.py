@@ -1,9 +1,9 @@
-"""ClipForge — pipeline orchestrator.
+﻿"""ClipForge â€” pipeline orchestrator.
 
-Stages: input → transcribe → context → select highlights → review → cut → auto-edit → output.
+Stages: input â†’ transcribe â†’ context â†’ select highlights â†’ review â†’ cut â†’ auto-edit â†’ output.
 
 Commands:
-  analyze     transcribe → context → select (produces candidates for review)
+  analyze     transcribe â†’ context â†’ select (produces candidates for review)
   export      cut + render approved clips
   pipeline    full auto run (analyze + cut + render), review skipped
   transcribe / context / select / cut / render   single stages
@@ -29,8 +29,11 @@ for _stream in ("stdout", "stderr"):
 
 from src.config import config, ROOT
 from src import transcribe, build_context, select_highlights, cut_clips, apply_template
+from src import clean_transcript
 from src import fetch_broll
+from src import extract_frames, analyze_frames
 from src import progress
+from src import campaigns as camp_mod
 
 VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")
 
@@ -56,8 +59,35 @@ def _resolve_video(value):
         f"Video not found: {p} (looked in cwd and {config.input_dir})")
 
 
+def _active_campaign():
+    cid = getattr(config, "active_campaign_id", None)
+    return camp_mod.get_campaign(cid) if cid else None
+
+
+def _sync_reviewing(video):
+    camp = _active_campaign()
+    if not camp:
+        return
+    data = {}
+    cp = _candidates_path(video)
+    if cp.exists():
+        try:
+            data = json.loads(cp.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            data = {}
+    camp_mod.sync_clips_from_candidates(camp, video.stem, data.get("clips") or [],
+                                        status="reviewing")
+
+
+def _sync_exported(video, clips=None):
+    camp = _active_campaign()
+    if not camp:
+        return
+    camp_mod.mark_clips_exported(camp, video.stem, clips)
+
+
 def _transcript_path(video):
-    return config.transcripts_dir / f"{video.stem}_transcript.json"
+    return clean_transcript.best_transcript_path(video)
 
 
 def _context_path(video):
@@ -104,6 +134,15 @@ def cmd_transcribe(args):
     progress.emit(100, "done", "Transcript saved")
 
 
+def cmd_clean(args):
+    if args.emit_progress:
+        progress.enable()
+    progress.emit(0, "clean", "Fixing low-confidence words")
+    clean_transcript.clean_transcript(_resolve_video(args.video),
+                                      transcript_path=args.transcript)
+    progress.emit(100, "done", "Transcript cleaned")
+
+
 def cmd_context(args):
     if args.emit_progress:
         progress.enable()
@@ -115,12 +154,20 @@ def cmd_context(args):
 def cmd_select(args):
     if args.emit_progress:
         progress.enable()
-    select_highlights.select_highlights(_resolve_video(args.video),
+    video = _resolve_video(args.video)
+    rules = None
+    camp = _active_campaign()
+    if camp:
+        rules = camp.rules_summary() if camp else None
+        camp_mod.add_analyzing_placeholder(camp, video.stem)
+    select_highlights.select_highlights(video,
                                         transcript_path=args.transcript,
                                         context_path=args.context,
                                         max_clips=args.max_clips,
                                         min_score=args.min_score,
+                                        rules_summary=rules,
                                         progress=_scaled(0, 100, "select"))
+    _sync_reviewing(video)
 
 
 def cmd_review(args):
@@ -183,16 +230,26 @@ def cmd_render(args):
 
 
 def _prepare(video, args, t0, t1):
-    """Run transcribe → context → select → broll; returns candidates path."""
+    """Run transcribe → clean → context → select → broll; returns candidates path."""
+    camp = _active_campaign()
+    if camp:
+        camp_mod.add_analyzing_placeholder(camp, video.stem)
     progress.emit(t0, "transcribe", "Transcribing audio")
-    transcribe.transcribe(video, progress=_scaled(t0, t0 + (t1 - t0) * 0.5, "transcribe"))
+    transcribe.transcribe(video, progress=_scaled(t0, t0 + (t1 - t0) * 0.45, "transcribe"))
+    if config.clean_transcript:
+        progress.emit(t0 + (t1 - t0) * 0.45, "clean", "Fixing low-confidence words")
+        clean_transcript.clean_transcript(video)
     progress.emit(t0 + (t1 - t0) * 0.5, "context", "Building video context")
     build_context.build_context(video)
     progress.emit(t0 + (t1 - t0) * 0.55, "select", "Finding highlights with the LLM")
+    camp = _active_campaign()
+    rules = camp.rules_summary() if camp else None
     select_highlights.select_highlights(video, max_clips=args.max_clips,
                                         min_score=args.min_score,
+                                        rules_summary=rules,
                                         progress=_scaled(t0 + (t1 - t0) * 0.55,
                                                          t0 + (t1 - t0) * 0.9, "select"))
+    _sync_reviewing(video)
     progress.emit(t0 + (t1 - t0) * 0.92, "broll", "Resolving b-roll library")
     data, clips = cut_clips.load_candidates(_candidates_path(video))
     fetch_broll.build_manifest(video.stem, clips)
@@ -217,8 +274,58 @@ def cmd_broll(args):
     progress.emit(100, "done", "B-roll manifest ready")
 
 
+
+def cmd_frames(args):
+    """Extract frames for style analysis (side tool)."""
+    if args.emit_progress:
+        progress.enable()
+    config.ensure_dirs()
+    video = _resolve_video(args.video)
+    manifest = extract_frames.extract_frames(
+        video, mode=args.mode, n_frames=args.num, scene_threshold=args.threshold,
+        width=args.width, grid=args.grid, max_frames=args.max_frames,
+        progress=_scaled(0, 100, "frames"))
+    n = len(manifest["frames"])
+    sheets = manifest.get("sheets") or []
+    print(f"[frames] {n} frame(s) extracted to {config.frames_dir / video.stem}")
+    if sheets:
+        print(f"[frames] contact sheets: {', '.join(sheets)}")
+    progress.emit(100, "done", f"{n} frames extracted")
+
+
+def cmd_style(args):
+    """Analyze extracted frames -> style report + draft template."""
+    if args.emit_progress:
+        progress.enable()
+    config.ensure_dirs()
+    video = _resolve_video(args.video)
+    report, template = analyze_frames.analyze_and_draft(
+        video.stem, name=args.name, cta_text=args.cta_text,
+        progress=_scaled(0, 90, "frames"))
+    report_dir = config.frames_dir / video.stem
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir / "style_report.json"
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+    camp = _active_campaign()
+    if camp:
+        tpl_path = camp.template_path
+    else:
+        tpl_path = config.root / "templates" / f"{args.name or video.stem + '_style'}.json"
+    tpl_path.parent.mkdir(parents=True, exist_ok=True)
+    tpl_path.write_text(json.dumps(template, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+    print(f"[style] report  -> {report_path}")
+    print(f"[style] template -> {tpl_path}")
+    print(f"[style] layout={report['layout']} "
+          f"hook={report['hook']['median_hex']} "
+          f"captions={report['captions']['median_hex']} "
+          f"keyword={report['captions']['keyword_hex']} "
+          f"cta={report['cta']['median_hex']}")
+    progress.emit(100, "done", "Style template drafted")
+
 def cmd_analyze(args):
-    """transcribe → context → select. Produces candidates for review."""
+    """transcribe â†’ context â†’ select. Produces candidates for review."""
     if args.emit_progress:
         progress.enable()
     config.ensure_dirs()
@@ -253,6 +360,7 @@ def cmd_export(args):
                                             hook_text=clips[i].get("hook") or None,
                                             broll_cues=_broll_for(broll_manifest, i + 1))
         print(f"[export] -> {out}")
+    _sync_exported(video, clips)
     progress.emit(100, "done", f"Exported {len(results)} clips")
 
 
@@ -283,6 +391,7 @@ def cmd_pipeline(args):
                                             broll_cues=_broll_for(broll_manifest, i + 1))
         print(f"[pipeline] final -> {out}")
 
+    _sync_exported(video, clips)
     progress.emit(100, "done", f"Done: {len(results)} clips exported")
     print(f"[pipeline] done: {len(results)} clips exported to {config.output_dir}")
 
@@ -317,6 +426,7 @@ def main():
     parser = argparse.ArgumentParser(prog="clipforge", description="AI auto-clipper pipeline.")
     parser.add_argument("--emit-progress", action="store_true",
                         help="Emit @@PROGRESS@@ JSON lines on stdout for the web UI.")
+    parser.add_argument("--campaign", help="Scope pipeline dirs to this campaign id.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("transcribe", help="Transcribe a video (Phase 1)")
@@ -324,6 +434,11 @@ def main():
     p.add_argument("--model"); p.add_argument("--device")
     p.add_argument("--compute"); p.add_argument("--language")
     p.set_defaults(func=cmd_transcribe)
+
+    p = sub.add_parser("clean", help="Fix low-confidence transcript words via LLM (Phase 1.7)")
+    p.add_argument("video")
+    p.add_argument("--transcript")
+    p.set_defaults(func=cmd_clean)
 
     p = sub.add_parser("context", help="Build per-video context (Phase 1.5)")
     p.add_argument("video"); p.add_argument("--transcript")
@@ -345,6 +460,22 @@ def main():
     p.add_argument("video"); p.add_argument("--candidates"); p.add_argument("--transcript")
     p.add_argument("--template"); p.add_argument("--auto", action="store_true")
     p.set_defaults(func=cmd_render)
+
+    p = sub.add_parser("frames", help="Extract frames for style analysis")
+    p.add_argument("video")
+    p.add_argument("--mode", choices=["uniform", "scene"], default="uniform")
+    p.add_argument("--num", type=int, default=12, help="uniform: number of frames")
+    p.add_argument("--threshold", type=float, default=0.3, help="scene: change threshold")
+    p.add_argument("--max-frames", dest="max_frames", type=int, default=24, help="scene: cap")
+    p.add_argument("--width", type=int, default=360, help="frame width in px")
+    p.add_argument("--grid", help='optional contact sheet, e.g. "3x4"')
+    p.set_defaults(func=cmd_frames)
+
+    p = sub.add_parser("style", help="Analyze frames -> draft style template")
+    p.add_argument("video")
+    p.add_argument("--name", help="template name (default <stem>_style)")
+    p.add_argument("--cta-text", dest="cta_text", default="Follow for more!")
+    p.set_defaults(func=cmd_style)
 
     p = sub.add_parser("analyze", help="transcribe -> context -> select (for review)")
     p.add_argument("video"); p.add_argument("--max-clips", type=int); p.add_argument("--min-score", type=float)
@@ -372,8 +503,11 @@ def main():
     p.set_defaults(func=cmd_batch)
 
     args = parser.parse_args()
+    if args.campaign:
+        config.activate_campaign(args.campaign)
     args.func(args)
 
 
 if __name__ == "__main__":
     main()
+

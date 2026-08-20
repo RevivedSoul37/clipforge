@@ -1,0 +1,64 @@
+{
+  "name": "abu_lahya",
+  "description": "Abu Lahya house style: letterbox native-aspect band on black, cream Bebas hook at video top, white Poppins captions with pure-red keyword emphasis, static red CTA above band bottom.",
+  "output": {
+    "aspect_ratio": "9:16",
+    "resolution": "1080x1920"
+  },
+  "crop": {
+    "mode": "letterbox",
+    "background": "#000000"
+  },
+  "hook": {
+    "enabled": true,
+    "font": "Bebas Neue",
+    "size": 110,
+    "color": "#FAF8E6",
+    "position": "top",
+    "margin_v": 30,
+    "anchor": "band"
+  },
+  "captions": {
+    "enabled": true,
+    "font": "Poppins-Bold",
+    "size": 88,
+    "color": "#FAF8E6",
+    "outline_color": "#000000",
+    "outline_width": 4,
+    "position": "bottom_center",
+    "margin_v": 420,
+    "max_words": 4,
+    "anchor": "band",
+    "highlight_keyword": {
+      "enabled": true,
+      "color": "#E00000"
+    }
+  },
+  "cta": {
+    "enabled": true,
+    "text": "Follow for more!",
+    "font": "Poppins-Bold",
+    "size": 64,
+    "color": "#E00000",
+    "position": "bottom",
+    "margin_v": 20,
+    "anchor": "band"
+  },
+  "music": {
+    "enabled": true,
+    "track": "nocopyrightsound633-islamic-background-music-no-copyright-eid-mubarak-serene-paradox-338311.mp3",
+    "volume": 0.12
+  },
+  "broll": {
+    "enabled": false
+  },
+  "intro": {
+    "enabled": false
+  },
+  "outro": {
+    "enabled": false
+  },
+  "watermark": {
+    "enabled": false
+  }
+}

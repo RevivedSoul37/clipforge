@@ -1,4 +1,4 @@
-"""Central configuration for ClipForge.
+﻿"""Central configuration for ClipForge.
 
 Loads config.json (user settings) and .env (secrets/overrides), then exposes a
 single `config` object with resolved absolute paths and typed defaults.
@@ -60,12 +60,20 @@ class Config:
         self.transcripts_dir = self._resolve(paths.get("transcripts", "data/transcripts"))
         self.context_dir = self._resolve(paths.get("context", "data/context"))
         self.candidates_dir = self._resolve(paths.get("clip_candidates", "data/clip_candidates"))
+        self.frames_dir = self._resolve(paths.get("frames", "data/frames"))
+        self.campaigns_dir = self._resolve(paths.get("campaigns", "data/campaigns"))
+        self.active_campaign_id = None
 
         t = _deep_get(self.data, "transcription", {}) or {}
         self.whisper_model = self.env.get("WHISPER_MODEL") or t.get("model", "large-v3")
         self.whisper_device = t.get("device", "auto")
         self.whisper_compute = t.get("compute_type", "auto")
         self.whisper_language = t.get("language") or None
+        # Decoder biasing: a glossary prompt reduces phonetic mishearings
+        # (e.g. "gym" -> "jym"). Edit per-channel in config.json.
+        self.whisper_initial_prompt = t.get("initial_prompt") or None
+        self.whisper_condition_on_previous = bool(t.get("condition_on_previous_text", False))
+        self.whisper_low_confidence = float(t.get("low_confidence_threshold", 0.55))
 
         llm = _deep_get(self.data, "llm", {}) or {}
         self.llm_provider = llm.get("provider", "ollama")
@@ -74,6 +82,15 @@ class Config:
         self.llm_max_clips = int(llm.get("max_clips", 10))
         self.llm_min_score = float(llm.get("min_score", 0.5))
         self.llm_chunk_words = int(llm.get("chunk_words", 1200))
+        self.llm_chunk_overlap_words = int(llm.get("chunk_overlap_words", 250))
+        self.llm_num_ctx = int(llm.get("num_ctx", 8192))
+        self.llm_temperature = float(llm.get("temperature", 0.2))
+        # num_predict 0 = provider default; set >0 to cap output tokens.
+        self.llm_num_predict = int(llm.get("num_predict", 0))
+        # think: false stops reasoning-style models from returning empty
+        # answers (they otherwise spend the whole budget on internal tokens).
+        self.llm_think = bool(llm.get("think", False))
+        self.clean_transcript = bool(llm.get("clean_transcript", True))
         self.rules_file = self._resolve(llm.get("rules_file", "data/selection_rules.txt"))
         self.broll_pexels_key = self.env.get("PEXELS_API_KEY", "")
         self.broll_pixabay_key = self.env.get("PIXABAY_API_KEY", "")
@@ -98,11 +115,50 @@ class Config:
         p = Path(value)
         return p if p.is_absolute() else self.root / p
 
+    def campaign_root(self, campaign_id: str) -> Path:
+        return self.campaigns_dir / campaign_id
+
+    def input_dir_for(self, campaign_id=None) -> Path:
+        if campaign_id:
+            return self.campaign_root(campaign_id) / "input"
+        return self.input_dir
+
+    def output_dir_for(self, campaign_id=None) -> Path:
+        if campaign_id:
+            return self.campaign_root(campaign_id) / "output"
+        return self.output_dir
+
+    def raw_dir_for(self, campaign_id=None) -> Path:
+        if campaign_id:
+            return self.campaign_root(campaign_id) / "output" / "raw"
+        return self.raw_dir
+
+    def activate_campaign(self, campaign_id: str):
+        """Remap pipeline dirs onto a campaign folder for this process."""
+        from src.campaigns import get_campaign
+        camp = get_campaign(campaign_id)
+        if camp is None:
+            raise FileNotFoundError(f"campaign not found: {campaign_id}")
+        camp.ensure_dirs()
+        self.active_campaign_id = camp.id
+        self.input_dir = camp.input_dir
+        self.output_dir = camp.output_dir
+        self.raw_dir = camp.raw_dir
+        self.transcripts_dir = camp.transcripts_dir
+        self.context_dir = camp.context_dir
+        self.candidates_dir = camp.candidates_dir
+        self.frames_dir = camp.frames_dir
+        self.rules_file = camp.rules_summary_path
+        if camp.has_template():
+            self.default_template = str(camp.template_path)
+        return camp
+
     def ensure_dirs(self):
         for d in (self.input_dir, self.output_dir, self.raw_dir, self.music_dir,
                   self.broll_dir, self.transcripts_dir, self.context_dir,
-                  self.candidates_dir):
+                  self.candidates_dir, self.frames_dir, self.campaigns_dir):
             d.mkdir(parents=True, exist_ok=True)
 
 
 config = Config()
+

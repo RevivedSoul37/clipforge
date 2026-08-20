@@ -1,8 +1,18 @@
-"""Phase 1 — Transcription pipeline.
+"""Phase 1 â€” Transcription pipeline.
 
 Wraps faster-whisper to produce a word-level, timestamped transcript JSON for a
 single video. Extracts a 16k mono audio track with ffmpeg first, transcribes it,
 and writes the result to data/transcripts/<video_id>_transcript.json.
+
+Accuracy settings (see config.json -> transcription):
+- initial_prompt: a glossary sentence that biases the decoder toward the
+  channel's vocabulary, which strongly reduces phonetic mishearings like
+  "gym" -> "jym". It also nudges Whisper toward capitalized, punctuated text.
+- condition_on_previous_text=False: prevents one bad segment from cascading
+  garbage into every following segment.
+- language pinned to "en": avoids language-autodetect wobble on accented or
+  multilingual speech (low language_probability scores were producing
+  word-level slips).
 """
 import json
 import os
@@ -80,13 +90,21 @@ def transcribe(video_path, model_size=None, device=None, compute_type=None,
         print("[transcribe] extracting audio track")
         _extract_audio(video_path, audio_path)
 
-        print("[transcribe] transcribing (word timestamps enabled)")
-        segments, info = model.transcribe(
-            str(audio_path),
+        transcribe_kwargs = dict(
             word_timestamps=True,
             language=language,
             vad_filter=True,
+            temperature=0.0,
+            # Don't let a hallucinated/misheard segment poison the rest. (kept)
+            condition_on_previous_text=config.whisper_condition_on_previous,
         )
+        initial_prompt = config.whisper_initial_prompt
+        if initial_prompt:
+            transcribe_kwargs["initial_prompt"] = initial_prompt
+            print(f"[transcribe] using vocabulary biasing prompt "
+                  f"({len(initial_prompt)} chars)")
+        print("[transcribe] transcribing (word timestamps enabled)")
+        segments, info = model.transcribe(str(audio_path), **transcribe_kwargs)
 
         result = {
             "video_id": video_path.stem,

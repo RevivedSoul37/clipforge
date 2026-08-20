@@ -32,6 +32,27 @@ if not exist ".venv\Scripts\python.exe" (
 
 set "PORT=8600"
 
+rem ---- free the port if a stale ClipForge server holds it -----------------
+netstat -ano | findstr /R /C:":%PORT%  *[^ ]*  *[^ ]*  *LISTENING" >nul 2>nul
+if not errorlevel 1 (
+    echo  Port %PORT% is already in use - a previous ClipForge server
+    echo  is probably still running. Closing it so you get the latest code...
+    for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%PORT%  *[^ ]*  *[^ ]*  *LISTENING"') do (
+        taskkill /F /T /PID %%P >nul 2>nul
+    )
+    timeout /t 2 >nul
+    netstat -ano | findstr /R /C:":%PORT%  *[^ ]*  *[^ ]*  *LISTENING" >nul 2>nul
+    if not errorlevel 1 (
+        echo  [ERROR] Could not free port %PORT%. Kill the process manually:
+        echo          netstat -ano ^| findstr :%PORT%
+        echo          taskkill /F /PID ^<pid^>
+        pause
+        exit /b 1
+    )
+    echo  Port freed.
+    echo.
+)
+
 echo  Starting ClipForge...
 echo.
 echo  Web UI:      http://localhost:%PORT%

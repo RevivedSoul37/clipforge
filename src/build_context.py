@@ -1,4 +1,4 @@
-"""Phase 1.5 — Per-video context builder.
+"""Phase 1.5 â€” Per-video context builder.
 
 Before highlight selection, generate a context.json describing the video's type,
 tone, topic, and target platform. v1 uses a lightweight heuristic classifier over
@@ -77,12 +77,13 @@ def _full_text(transcript):
 
 
 def build_context(video_path, transcript_path=None, overrides=None, output_dir=None):
+    from src.clean_transcript import best_transcript_path
+
     video_path = Path(video_path)
     if not video_path.exists():
         raise FileNotFoundError(f"Video not found: {video_path}")
 
-    transcript_path = Path(transcript_path) if transcript_path else \
-        config.transcripts_dir / f"{video_path.stem}_transcript.json"
+    transcript_path = Path(transcript_path) if transcript_path else best_transcript_path(video_path)
     if not transcript_path.exists():
         raise FileNotFoundError(
             f"Transcript not found: {transcript_path}. Run transcribe first.")

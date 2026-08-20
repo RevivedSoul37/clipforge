@@ -34,7 +34,8 @@ def _save(path: Path, data):
 
 
 def _transcript_for(data):
-    p = config.transcripts_dir / f"{data['video_id']}_transcript.json"
+    from src.clean_transcript import best_transcript_path
+    p = best_transcript_path(data["video_id"])
     return _load(p) if p.exists() else None
 
 

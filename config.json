@@ -3,7 +3,10 @@
     "model": "large-v3",
     "device": "auto",
     "compute_type": "auto",
-    "language": null
+    "language": "en",
+    "initial_prompt": "Podcast conversation about fitness, discipline, consistency, business, money and self-improvement. Words used often: gym, workout, training, discipline, consistency, focus, habits, routine, success. Islamic expressions sometimes appear spelled normally: salam alaikum, Astaghfirullah, subhanallah, inshallah, alhamdulillah. The transcript uses proper capitalization and punctuation.",
+    "condition_on_previous_text": false,
+    "low_confidence_threshold": 0.55
   },
   "llm": {
     "provider": "ollama",
@@ -11,7 +14,13 @@
     "base_url": "http://localhost:11434",
     "max_clips": 10,
     "min_score": 0.5,
-    "chunk_words": 1200,
+    "chunk_words": 700,
+    "chunk_overlap_words": 200,
+    "num_ctx": 8192,
+    "num_predict": 0,
+    "think": false,
+    "temperature": 0.2,
+    "clean_transcript": true,
     "rules_file": "data/selection_rules.txt"
   },
   "context": {

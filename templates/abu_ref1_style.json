@@ -1,0 +1,60 @@
+{
+  "name": "abu_ref1_style",
+  "description": "Auto-drafted from reference 'abu_ref1' (3 frames). Review and tune.",
+  "output": {
+    "aspect_ratio": "9:16",
+    "resolution": "1080x1920"
+  },
+  "crop": {
+    "mode": "letterbox",
+    "background": "#000000"
+  },
+  "hook": {
+    "enabled": true,
+    "font": "Bebas Neue",
+    "size": 110,
+    "color": "#FBFDF8",
+    "position": "top",
+    "margin_v": 160
+  },
+  "captions": {
+    "enabled": true,
+    "font": "Poppins-Bold",
+    "size": 76,
+    "color": "#FDFCEC",
+    "outline_color": "#000000",
+    "outline_width": 4,
+    "position": "bottom_center",
+    "margin_v": 340,
+    "max_words": 4,
+    "highlight_keyword": {
+      "enabled": true,
+      "color": "#FC0100"
+    }
+  },
+  "music": {
+    "enabled": true,
+    "volume": 0.12
+  },
+  "broll": {
+    "enabled": false
+  },
+  "intro": {
+    "enabled": false
+  },
+  "outro": {
+    "enabled": false
+  },
+  "watermark": {
+    "enabled": false
+  },
+  "cta": {
+    "enabled": true,
+    "text": "Follow for more!",
+    "font": "Poppins-Bold",
+    "size": 48,
+    "color": "#FC0100",
+    "position": "bottom",
+    "margin_v": 120
+  }
+}

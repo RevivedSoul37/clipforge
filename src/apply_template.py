@@ -1,4 +1,4 @@
-"""Phase 5 — Auto-edit template engine.
+﻿"""Phase 5 â€” Auto-edit template engine.
 
 Applies a template JSON (aspect-ratio crop + burned-in captions) to a raw clip
 via ffmpeg filters. Captions are generated as an ASS subtitle file from the word
@@ -21,12 +21,16 @@ AUDIO_EXTS = (".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac")
 
 
 def load_template(name):
-    path = TEMPLATE_DIR / name
-    if not path.suffix:
-        path = path.with_suffix(".json")
+    raw = Path(name)
+    if raw.is_absolute() or (raw.suffix == ".json" and raw.exists()):
+        path = raw
+    else:
+        path = TEMPLATE_DIR / name
+        if not path.suffix:
+            path = path.with_suffix(".json")
     if not path.exists():
         raise FileNotFoundError(f"Template not found: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def _clip_seed(path: Path):
@@ -38,10 +42,6 @@ def _clip_seed(path: Path):
 
 
 def _has_audio(path: Path):
-    cmd = ["ffprobe", "-v", "error", "-select_streams", "a:0",
-           "-show_entries", "stream=index", "-of", "csv=p=0", str(path)]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    return proc.returncode == 0 and bool(proc.stdout.strip())
     cmd = ["ffprobe", "-v", "error", "-select_streams", "a:0",
            "-show_entries", "stream=index", "-of", "csv=p=0", str(path)]
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -154,7 +154,8 @@ def _alignment(position, default):
             "bottom_center": 2, "top_center": 8}.get(position, default)
 
 
-def _build_ass(lines, template, resx, resy, clip_duration, hook_text=None):
+def _build_ass(lines, template, resx, resy, clip_duration, hook_text=None,
+               band_offset=0, band_height=None):
     caps = template.get("captions", {})
     font, bold = _parse_font(caps.get("font", "Arial"))
     size = int(caps.get("size", 64))
@@ -169,6 +170,11 @@ def _build_ass(lines, template, resx, resy, clip_duration, hook_text=None):
         margin_v = int(caps["margin_v"])
     else:
         margin_v = 220 if cap_align == 2 and "9:16" in template["output"]["aspect_ratio"] else 80
+    # captions anchor to the video band bottom when banded (margin_v counts
+    # from the frame bottom, so lift by the lower black bar height)
+    cap_anchor = str(caps.get("anchor", "frame"))
+    if cap_anchor == "band" and band_height is not None:
+        margin_v += max(0, resy - band_offset - band_height)
 
     grad = caps.get("gradient", {}) or {}
     grad_enabled = bool(grad.get("enabled"))
@@ -184,6 +190,22 @@ def _build_ass(lines, template, resx, resy, clip_duration, hook_text=None):
     h_color = _hex_to_bgr(hook.get("color", "#F1EFD5"))
     h_align = _alignment(hook.get("position", "top"), 8)
     h_margin_v = int(hook.get("margin_v", 150))
+    # anchors to the video band top when letterboxed/square-banded
+    h_anchor = str(hook.get("anchor", "frame"))
+    if h_anchor == "band" and band_offset:
+        h_margin_v += band_offset
+
+    cta = template.get("cta", {}) or {}
+    cta_enabled = bool(cta.get("enabled")) and bool(cta.get("text"))
+    c_font, c_bold = _parse_font(cta.get("font", "Arial"))
+    c_size = int(cta.get("size", 48))
+    c_color = _hex_to_bgr(cta.get("color", "#E00000"))
+    c_align = _alignment(cta.get("position", "bottom"), 2)
+    c_margin_v = int(cta.get("margin_v", 120))
+    # anchors to the video band bottom when letterboxed/square-banded
+    c_anchor = str(cta.get("anchor", "frame"))
+    if c_anchor == "band" and band_height is not None:
+        c_margin_v += (resy - band_offset - band_height)
 
     styles = [f"Style: Caption,{font},{size},{primary},&H00FFFFFF,{outline_color},"
               f"&H80000000,{bold},0,0,0,100,100,0,0,1,{outline},1,{cap_align},40,40,{margin_v},1"]
@@ -191,6 +213,10 @@ def _build_ass(lines, template, resx, resy, clip_duration, hook_text=None):
         styles.append(
             f"Style: Hook,{h_font},{h_size},{h_color},&H00FFFFFF,&H00000000,&H00000000,"
             f"{h_bold},0,0,0,100,100,0,0,1,0,0,{h_align},80,80,{h_margin_v},1")
+    if cta_enabled:
+        styles.append(
+            f"Style: Cta,{c_font},{c_size},{c_color},&H00FFFFFF,&H00000000,&H00000000,"
+            f"{c_bold},0,0,0,100,100,0,0,1,1,1,{c_align},80,80,{c_margin_v},1")
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -210,6 +236,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         events.append(
             f"Dialogue: 1,0:00:00.00,{_ass_time(clip_duration)},Hook,,0,0,0,,"
             f"{_ass_escape(hook_text)}")
+    if cta_enabled:
+        events.append(
+            f"Dialogue: 1,0:00:00.00,{_ass_time(clip_duration)},Cta,,0,0,0,,"
+            f"{_ass_escape(cta['text'])}")
     for line in lines:
         start = _ass_time(line[0]["start"])
         end = _ass_time(line[-1]["end"])
@@ -238,23 +268,34 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def _video_filters(w, h, template):
-    """Return the ffmpeg -vf chain for the template's crop mode."""
+    """Return (filters, band_offset) for the template's crop mode.
+
+    band_offset is the vertical distance from the output frame top to the top
+    of the video band (0 for full-frame modes); text anchoring uses it so
+    hook/captions/cta sit relative to the video band, not the black bars.
+    """
     out = template["output"]
     rx, ry = (int(x) for x in out["resolution"].split("x"))
     mode = (template.get("crop", {}) or {}).get("mode", "center_crop")
     bg = (template.get("crop", {}) or {}).get("background", "#000000").lstrip("#")
 
     if mode == "letterbox":
-        return [f"scale={rx}:{ry}:force_original_aspect_ratio=decrease",
-                f"pad={rx}:{ry}:(ow-iw)/2:(oh-ih)/2:color=0x{bg}"]
+        # scaled content height after force_original_aspect_ratio=decrease
+        scale = min(rx / w, ry / h)
+        content_h = max(2, int(round(h * scale)))
+        content_h -= content_h % 2
+        pad_y = max(0, (ry - content_h) // 2)
+        return ([f"scale={rx}:{ry}:force_original_aspect_ratio=decrease",
+                 f"pad={rx}:{ry}:(ow-iw)/2:(oh-ih)/2:color=0x{bg}"], pad_y)
 
     if mode == "square_band":
         side = min(w, h)
         side -= side % 2
         band = min(rx, ry)
-        return [f"crop={side}:{side}:{(w - side) // 2}:{(h - side) // 2}",
-                f"scale={band}:{band}",
-                f"pad={rx}:{ry}:(ow-iw)/2:(oh-ih)/2:color=0x{bg}"]
+        pad_y = (ry - band) // 2
+        return ([f"crop={side}:{side}:{(w - side) // 2}:{(h - side) // 2}",
+                 f"scale={band}:{band}",
+                 f"pad={rx}:{ry}:(ow-iw)/2:(oh-ih)/2:color=0x{bg}"], pad_y)
 
     a_w, a_h = (int(x) for x in out["aspect_ratio"].split(":"))
     r = a_w / a_h
@@ -270,7 +311,7 @@ def _video_filters(w, h, template):
             ch -= ch % 2
             filters.append(f"crop={w}:{ch}:0:{(h - ch) // 2}")
     filters.append(f"scale={rx}:{ry}")
-    return filters
+    return filters, 0
 
 
 def _broll_graph(filters, cues, ass_filter, resx, resy, template):
@@ -340,7 +381,17 @@ def apply_template(raw_clip_path, transcript_path, clip_start, clip_end,
     out = template["output"]
     resx, resy = (int(x) for x in out["resolution"].split("x"))
     w, h = _probe_video(raw_clip_path)
-    filters = _video_filters(w, h, template)
+    filters, band_offset = _video_filters(w, h, template)
+    # video band height in the output frame (letterbox/square_band shrink it)
+    crop_mode = (template.get("crop", {}) or {}).get("mode", "center_crop")
+    if crop_mode == "square_band":
+        band_height = min(resx, resy)
+    elif crop_mode == "letterbox":
+        scale = min(resx / w, resy / h)
+        band_height = max(2, int(round(h * scale)))
+        band_height -= band_height % 2
+    else:
+        band_height = resy
 
     transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
     clip_duration = max(0.1, clip_end - clip_start)
@@ -351,9 +402,12 @@ def apply_template(raw_clip_path, transcript_path, clip_start, clip_end,
         lines = _group_lines(words, max_words=int(caps.get("max_words", 3))) if words else []
         hook_on = bool(template.get("hook", {}).get("enabled")) and bool(hook_text)
         ass_filter = None
-        if lines or hook_on:
+        cta_on = bool(template.get("cta", {}).get("enabled")) and \
+            bool(template.get("cta", {}).get("text"))
+        if lines or hook_on or cta_on:
             ass_text = _build_ass(lines, template, resx, resy, clip_duration,
-                                  hook_text=hook_text if hook_on else None)
+                                  hook_text=hook_text if hook_on else None,
+                                  band_offset=band_offset, band_height=band_height)
             ass_path = tmp / "captions.ass"
             ass_path.write_text(ass_text, encoding="utf-8")
             sub_opts = "captions.ass"
@@ -463,3 +517,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     apply_template(args.raw_clip, args.transcript, args.clip_start, args.clip_end,
                    template_name=args.template, hook_text=args.hook)
+

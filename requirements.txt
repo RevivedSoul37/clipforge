@@ -6,3 +6,7 @@ streamlit>=1.32
 starlette>=0.37
 uvicorn>=0.29
 python-multipart>=0.0.9
+
+# Campaign rules-doc extraction
+pypdf>=4.0
+python-docx>=1.1
