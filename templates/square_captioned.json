@@ -1,13 +1,20 @@
 {
   "name": "square_captioned",
-  "description": "9:16 file with the square video as a centered band on black. Bebas Neue hook title in the top black band, bold gradient word captions at the video's bottom edge. The one template for all exports.",
+  "golden": true,
+  "label": "Square band",
+  "description": "9:16 with a square video band on black that follows the speaker. Hook in the top bar, gradient captions above the all-platform safe zone.",
   "output": {
     "aspect_ratio": "9:16",
     "resolution": "1080x1920"
   },
   "crop": {
     "mode": "square_band",
-    "background": "#000000"
+    "background": "#000000",
+    "follow_speaker": true
+  },
+  "effects": {
+    "grade": "none",
+    "vignette": 0.0
   },
   "hook": {
     "enabled": true,
@@ -15,7 +22,7 @@
     "size": 96,
     "color": "#F1EFD5",
     "position": "top",
-    "margin_v": 150
+    "margin_v": 180
   },
   "captions": {
     "enabled": true,
@@ -38,11 +45,11 @@
   },
   "music": {
     "enabled": true,
-    "track": "nocopyrightsound633-islamic-background-music-no-copyright-eid-mubarak-serene-paradox-338311.mp3",
+    "track": "",
     "volume": 0.12
   },
   "broll": {
-    "enabled": true,
+    "enabled": false,
     "mode": "cutaway",
     "pip_scale": 0.6
   },

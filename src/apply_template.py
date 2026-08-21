@@ -19,6 +19,30 @@ TEMPLATE_DIR = config.root / "templates"
 FONT_DIR = config.root / "assets" / "fonts"
 AUDIO_EXTS = (".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac")
 
+# Programmatic color/lighting presets (template "effects" block). Values are
+# kept conservative so they read as grades, not distortions.
+GRADE_FILTERS = {
+    "none": [],
+    "warm": ["eq=saturation=1.08", "colorbalance=rs=0.04:gs=0.01:bs=-0.05"],
+    "cool": ["colorbalance=rs=-0.04:bs=0.04", "eq=saturation=0.98"],
+    "punchy": ["eq=contrast=1.12:saturation=1.15", "curves=preset=cross_process"],
+    "bright": ["eq=brightness=0.06:saturation=1.05"],
+}
+
+
+def effects_filters(template):
+    """Return the ffmpeg filter list for the template's effects block."""
+    fx = template.get("effects", {}) or {}
+    grade = str(fx.get("grade", "none") or "none").lower()
+    out = list(GRADE_FILTERS.get(grade, []))
+    try:
+        vignette = float(fx.get("vignette", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        vignette = 0.0
+    if vignette > 0:
+        out.append("vignette=angle=PI/5")
+    return out
+
 
 def load_template(name):
     raw = Path(name)
@@ -168,8 +192,12 @@ def _build_ass(lines, template, resx, resy, clip_duration, hook_text=None,
     cap_align = _alignment(caps.get("position", "bottom_center"), 2)
     if "margin_v" in caps:
         margin_v = int(caps["margin_v"])
+    elif cap_align == 2 and "9:16" in template["output"]["aspect_ratio"]:
+        # Union of TikTok / Reels / Shorts UI chrome (~250px from bottom
+        # on 1080x1920) so one 9:16 file is postable everywhere.
+        margin_v = 250
     else:
-        margin_v = 220 if cap_align == 2 and "9:16" in template["output"]["aspect_ratio"] else 80
+        margin_v = 80
     # captions anchor to the video band bottom when banded (margin_v counts
     # from the frame bottom, so lift by the lower black bar height)
     cap_anchor = str(caps.get("anchor", "frame"))
@@ -189,7 +217,7 @@ def _build_ass(lines, template, resx, resy, clip_duration, hook_text=None,
     h_size = int(hook.get("size", 72))
     h_color = _hex_to_bgr(hook.get("color", "#F1EFD5"))
     h_align = _alignment(hook.get("position", "top"), 8)
-    h_margin_v = int(hook.get("margin_v", 150))
+    h_margin_v = int(hook.get("margin_v", 180))
     # anchors to the video band top when letterboxed/square-banded
     h_anchor = str(hook.get("anchor", "frame"))
     if h_anchor == "band" and band_offset:
@@ -267,40 +295,63 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + "\n".join(events) + "\n"
 
 
-def _video_filters(w, h, template):
+def _follow_crop(video_path, w, h, aspect):
+    if not video_path:
+        return None
+    from src.video_reframer import crop_filter
+    return crop_filter(video_path, w, h, aspect=aspect)
+
+
+def _video_filters(w, h, template, video_path=None):
     """Return (filters, band_offset) for the template's crop mode.
 
     band_offset is the vertical distance from the output frame top to the top
     of the video band (0 for full-frame modes); text anchoring uses it so
     hook/captions/cta sit relative to the video band, not the black bars.
+
+    Color/lighting effects (template "effects" block) are applied on the raw
+    frame BEFORE the crop/scale chain.
     """
     out = template["output"]
     rx, ry = (int(x) for x in out["resolution"].split("x"))
-    mode = (template.get("crop", {}) or {}).get("mode", "center_crop")
-    bg = (template.get("crop", {}) or {}).get("background", "#000000").lstrip("#")
+    crop_cfg = template.get("crop", {}) or {}
+    mode = crop_cfg.get("mode", "center_crop")
+    bg = crop_cfg.get("background", "#000000").lstrip("#")
+    follow = bool(crop_cfg.get("follow_speaker", mode in ("square_band", "smart_fill", "fill")))
+    grade = effects_filters(template)
 
     if mode == "letterbox":
-        # scaled content height after force_original_aspect_ratio=decrease
         scale = min(rx / w, ry / h)
         content_h = max(2, int(round(h * scale)))
         content_h -= content_h % 2
         pad_y = max(0, (ry - content_h) // 2)
-        return ([f"scale={rx}:{ry}:force_original_aspect_ratio=decrease",
-                 f"pad={rx}:{ry}:(ow-iw)/2:(oh-ih)/2:color=0x{bg}"], pad_y)
+        return (grade + [f"scale={rx}:{ry}:force_original_aspect_ratio=decrease",
+                         f"pad={rx}:{ry}:(ow-iw)/2:(oh-ih)/2:color=0x{bg}"], pad_y)
 
     if mode == "square_band":
         side = min(w, h)
         side -= side % 2
         band = min(rx, ry)
         pad_y = (ry - band) // 2
-        return ([f"crop={side}:{side}:{(w - side) // 2}:{(h - side) // 2}",
-                 f"scale={band}:{band}",
-                 f"pad={rx}:{ry}:(ow-iw)/2:(oh-ih)/2:color=0x{bg}"], pad_y)
+        crop = f"crop={side}:{side}:{(w - side) // 2}:{(h - side) // 2}"
+        if follow:
+            dyn = _follow_crop(video_path, w, h, "1:1")
+            if dyn:
+                crop = dyn
+        return (grade + [crop, f"scale={band}:{band}",
+                         f"pad={rx}:{ry}:(ow-iw)/2:(oh-ih)/2:color=0x{bg}"], pad_y)
 
-    a_w, a_h = (int(x) for x in out["aspect_ratio"].split(":"))
+    aspect = out["aspect_ratio"]
+    a_w, a_h = (int(x) for x in aspect.split(":"))
     r = a_w / a_h
     src_r = w / h
     filters = []
+    if mode in ("smart_fill", "fill") or (follow and abs(r - src_r) >= 1e-3):
+        dyn = _follow_crop(video_path, w, h, aspect)
+        if dyn:
+            filters.append(dyn)
+            filters.append(f"scale={rx}:{ry}")
+            return grade + filters, 0
     if abs(r - src_r) >= 1e-3:
         if r < src_r:
             cw = round(h * r)
@@ -311,7 +362,7 @@ def _video_filters(w, h, template):
             ch -= ch % 2
             filters.append(f"crop={w}:{ch}:0:{(h - ch) // 2}")
     filters.append(f"scale={rx}:{ry}")
-    return filters, 0
+    return grade + filters, 0
 
 
 def _broll_graph(filters, cues, ass_filter, resx, resy, template):
@@ -362,7 +413,7 @@ def _broll_graph(filters, cues, ass_filter, resx, resy, template):
 
 def apply_template(raw_clip_path, transcript_path, clip_start, clip_end,
                    template_name=None, output_dir=None, hook_text=None,
-                   broll_cues=None):
+                   broll_cues=None, template=None, out_name=None, preview=None):
     raw_clip_path = Path(raw_clip_path)
     transcript_path = Path(transcript_path)
     if not raw_clip_path.exists():
@@ -370,7 +421,12 @@ def apply_template(raw_clip_path, transcript_path, clip_start, clip_end,
     if not transcript_path.exists():
         raise FileNotFoundError(f"Transcript not found: {transcript_path}")
 
-    template = load_template(template_name or config.default_template)
+    template = template if isinstance(template, dict) \
+        else load_template(template_name or config.default_template)
+    if preview and isinstance(preview, dict) and preview.get("resolution"):
+        template = dict(template)
+        template["output"] = dict(template.get("output", {}))
+        template["output"]["resolution"] = str(preview["resolution"])
     tname = template["name"]
 
     if template.get("intro", {}).get("enabled") or template.get("outro", {}).get("enabled") \
@@ -381,7 +437,7 @@ def apply_template(raw_clip_path, transcript_path, clip_start, clip_end,
     out = template["output"]
     resx, resy = (int(x) for x in out["resolution"].split("x"))
     w, h = _probe_video(raw_clip_path)
-    filters, band_offset = _video_filters(w, h, template)
+    filters, band_offset = _video_filters(w, h, template, video_path=raw_clip_path)
     # video band height in the output frame (letterbox/square_band shrink it)
     crop_mode = (template.get("crop", {}) or {}).get("mode", "center_crop")
     if crop_mode == "square_band":
@@ -418,7 +474,7 @@ def apply_template(raw_clip_path, transcript_path, clip_start, clip_end,
                 sub_opts += ":fontsdir=."
             ass_filter = f"subtitles='{sub_opts}'"
 
-        bb_on = bool(template.get("broll", {}).get("enabled", True))
+        bb_on = bool(template.get("broll", {}).get("enabled", False))
         cues = []
         if bb_on and broll_cues:
             for cue in broll_cues:
@@ -434,7 +490,7 @@ def apply_template(raw_clip_path, transcript_path, clip_start, clip_end,
 
         out_dir = Path(output_dir) if output_dir else config.output_dir
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{raw_clip_path.stem}_{tname}.mp4"
+        out_path = out_dir / (out_name if out_name else f"{raw_clip_path.stem}_{tname}.mp4")
 
         seed = _clip_seed(raw_clip_path)
         music = _pick_music(template, seed)
@@ -491,9 +547,21 @@ def apply_template(raw_clip_path, transcript_path, clip_start, clip_end,
         else:
             cmd += ["-map", "0:v:0"]
         cmd += ["-map", a_map]
+        pv = preview if isinstance(preview, dict) else {}
+        enc_crf = pv.get("crf", config.crf)
+        enc_preset = pv.get("preset", config.preset)
+        enc_acodec = pv.get("audio_codec", config.audio_codec)
+        extra_vf = pv.get("extra_vf") or []
+        if extra_vf:
+            # low-cost preview extras (e.g. fps/thumbnail filters) applied last
+            if "-vf" in cmd:
+                i = cmd.index("-vf")
+                cmd[i + 1] = cmd[i + 1] + "," + ",".join(extra_vf)
+            elif "-filter_complex" not in cmd:
+                cmd += ["-vf", ",".join(extra_vf)]
         cmd += [
-            "-c:v", config.video_codec, "-preset", config.preset, "-crf", str(config.crf),
-            "-c:a", config.audio_codec, "-b:a", "192k",
+            "-c:v", config.video_codec, "-preset", str(enc_preset), "-crf", str(enc_crf),
+            "-c:a", enc_acodec, "-b:a", "192k",
             "-t", f"{clip_duration:.3f}",
             str(out_path),
         ]

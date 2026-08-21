@@ -1,29 +1,14 @@
-"""B-roll library + emotion-driven placement.
+"""On-clip stock B-roll: LLM query → Pexels/Pixabay → local cache.
 
-Placement psychology (the important part): b-roll must NEVER show the host or
-literal actions from the dialogue (no "he said gym -> show a gym"). It shows
-OTHER people (stock or AI-generated) embodying the EMOTIONAL subtext of the
-moment:
-
-  struggle  - depressed, stressed, needing help, overwhelmed
-  joy       - laughing, celebrating, relieved
-  wealth    - counting money, success, luxury, earning
-  health    - exercising, eating well, energetic
-  focus     - deep work, studying, determination
-  community - family, friends, support, togetherness
-
-The LLM tags each cue with an emotion; this module resolves it to a local file
-in data/broll/<emotion>/ (rotation, no repeat inside one clip). If the library
-slot is empty and an API key is configured (PEXELS_API_KEY / PIXABAY_API_KEY),
-missing emotions are fetched once and cached into the library. AI-generated
-clips can be dropped into the same folders by hand — they are treated exactly
-like stock.
+The LLM tags each cue with a short stock-search query. At clip time we fetch
+that query from Pexels, then Pixabay, cache under data/broll/cache/<slug>/,
+and overlay the file. Emotion tags from older candidates are mapped to a
+fallback query so existing JSON still resolves.
 """
 import json
 import random
 import re
 import subprocess
-import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -52,27 +37,65 @@ VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
 MAX_CUES_PER_CLIP = 4
 MAX_CUE_LEN = 8.0
+MAX_QUERY_LEN = 80
 
 
 def library_dir():
     return config.broll_dir
 
 
-def _library_files(emotion):
-    d = library_dir() / emotion
+def cache_root():
+    return library_dir() / "cache"
+
+
+def slugify(text, n=40):
+    slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+    return slug[:n] or "clip"
+
+
+def _normalize_query(text):
+    q = re.sub(r"\s+", " ", str(text or "").strip())[:MAX_QUERY_LEN]
+    return q
+
+
+def _query_for_cue(cue):
+    query = _normalize_query(cue.get("query"))
+    if query:
+        return query
+    emotion = str(cue.get("emotion", "")).strip().lower()
+    fallback = SEARCH_QUERIES.get(emotion)
+    if fallback:
+        return fallback[0]
+    return ""
+
+
+def _cache_dir(query):
+    return cache_root() / slugify(query, n=60)
+
+
+def _cache_files(query):
+    d = _cache_dir(query)
     if not d.is_dir():
         return []
     return sorted(p for p in d.iterdir()
                   if p.is_file() and p.suffix.lower() in VIDEO_EXTS + IMAGE_EXTS)
 
 
-def _pick(emotion, used, rng):
-    files = [f for f in _library_files(emotion) if f.name not in used]
-    if not files:
-        files = _library_files(emotion)
-    if not files:
-        return None
-    return rng.choice(files)
+def cache_stats():
+    root = cache_root()
+    if not root.is_dir():
+        return {"queries": 0, "files": 0}
+    queries = 0
+    files = 0
+    for d in root.iterdir():
+        if not d.is_dir():
+            continue
+        n = sum(1 for p in d.iterdir()
+                if p.is_file() and p.suffix.lower() in VIDEO_EXTS + IMAGE_EXTS)
+        if n:
+            queries += 1
+            files += n
+    return {"queries": queries, "files": files}
 
 
 def _probe_duration(path):
@@ -91,70 +114,105 @@ def _download(url, dest):
         dest.write_bytes(resp.read())
 
 
-def _fetch_pexels(emotion, count=2):
+def _fetch_pexels_query(query, dest_dir, count=2):
     key = config.broll_pexels_key
     if not key:
         return 0
+    url = ("https://api.pexels.com/videos/search?query="
+           + urllib.parse.quote(query) + "&per_page=4")
+    req = urllib.request.Request(
+        url, headers={"Authorization": key, "User-Agent": "ClipForge/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+        print(f"[broll] pexels fetch failed for '{query}': {exc}")
+        return 0
     added = 0
-    for query in SEARCH_QUERIES[emotion][:2]:
-        url = ("https://api.pexels.com/videos/search?query="
-               + urllib.parse.quote(query) + "&per_page=2")
-        req = urllib.request.Request(
-            url, headers={"Authorization": key, "User-Agent": "ClipForge/1.0"})
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
-            print(f"[broll] pexels fetch failed for '{query}': {exc}")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for video in data.get("videos", []):
+        if added >= count:
+            break
+        files = [f for f in video.get("video_files", [])
+                 if f.get("file_type") == "video/mp4" and f.get("link")]
+        if not files:
             continue
-        for video in data.get("videos", [])[:count]:
-            files = [f for f in video.get("video_files", [])
-                     if f.get("file_type") == "video/mp4" and f.get("link")]
-            if not files:
-                continue
-            best = min(files, key=lambda f: abs((f.get("width") or 0) - 1280))
-            link = best.get("link")
-            dest = library_dir() / emotion / f"pexels_{video.get('id')}_{added}.mp4"
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                _download(link, dest)
-                added += 1
-            except (urllib.error.URLError, OSError) as exc:
-                print(f"[broll] download failed: {exc}")
-                dest.unlink(missing_ok=True)
+        best = min(files, key=lambda f: abs((f.get("width") or 0) - 1280))
+        link = best.get("link")
+        dest = dest_dir / f"pexels_{video.get('id')}.mp4"
+        if dest.exists():
+            added += 1
+            continue
+        try:
+            _download(link, dest)
+            added += 1
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"[broll] download failed: {exc}")
+            dest.unlink(missing_ok=True)
     return added
 
 
-def _fetch_pixabay(emotion, count=2):
+def _fetch_pixabay_query(query, dest_dir, count=2):
     key = config.broll_pixabay_key
     if not key:
         return 0
+    url = ("https://pixabay.com/api/videos/?key=" + key
+           + "&q=" + urllib.parse.quote(query) + "&per_page=4")
+    req = urllib.request.Request(url, headers={"User-Agent": "ClipForge/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+        print(f"[broll] pixabay fetch failed for '{query}': {exc}")
+        return 0
     added = 0
-    for query in SEARCH_QUERIES[emotion][:2]:
-        url = ("https://pixabay.com/api/videos/?key=" + key
-               + "&q=" + urllib.parse.quote(query) + "&per_page=2")
-        req = urllib.request.Request(url, headers={"User-Agent": "ClipForge/1.0"})
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
-            print(f"[broll] pixabay fetch failed for '{query}': {exc}")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for hit in data.get("hits", []):
+        if added >= count:
+            break
+        videos = hit.get("videos", {})
+        medium = videos.get("medium") or videos.get("small") or videos.get("tiny")
+        link = (medium or {}).get("url")
+        if not link:
             continue
-        for hit in data.get("hits", [])[:count]:
-            videos = hit.get("videos", {})
-            medium = videos.get("medium") or videos.get("small") or videos.get("tiny")
-            link = (medium or {}).get("url")
-            if not link:
-                continue
-            dest = library_dir() / emotion / f"pixabay_{hit.get('id')}_{added}.mp4"
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                _download(link, dest)
-                added += 1
-            except (urllib.error.URLError, OSError) as exc:
-                print(f"[broll] download failed: {exc}")
-                dest.unlink(missing_ok=True)
+        dest = dest_dir / f"pixabay_{hit.get('id')}.mp4"
+        if dest.exists():
+            added += 1
+            continue
+        try:
+            _download(link, dest)
+            added += 1
+        except (urllib.error.URLError, OSError) as exc:
+            print(f"[broll] download failed: {exc}")
+            dest.unlink(missing_ok=True)
     return added
+
+
+def _ensure_files(query):
+    files = _cache_files(query)
+    if files:
+        return files
+    if not config.broll_pexels_key and not config.broll_pixabay_key:
+        print("[broll] no PEXELS_API_KEY / PIXABAY_API_KEY — skip fetch for "
+              f"'{query}'")
+        return []
+    dest = _cache_dir(query)
+    print(f"[broll] fetching stock for '{query}'")
+    n = _fetch_pexels_query(query, dest)
+    if n == 0:
+        n = _fetch_pixabay_query(query, dest)
+    if n == 0:
+        print(f"[broll] no stock results for '{query}'")
+    return _cache_files(query)
+
+
+def _pick(query, used, rng):
+    files = _ensure_files(query)
+    unused = [f for f in files if f.name not in used]
+    pool = unused or files
+    if not pool:
+        return None
+    return rng.choice(pool)
 
 
 def _clean_cues(cues, clip_start, clip_end):
@@ -165,8 +223,8 @@ def _clean_cues(cues, clip_start, clip_end):
             start, end = float(c.get("start")), float(c.get("end"))
         except (TypeError, ValueError):
             continue
-        emotion = str(c.get("emotion", "")).strip().lower()
-        if emotion not in VALID_EMOTIONS:
+        query = _query_for_cue(c)
+        if not query:
             continue
         start = max(clip_start, min(start, clip_end - 1.0))
         end = min(clip_end, max(end, start + 1.5))
@@ -174,12 +232,16 @@ def _clean_cues(cues, clip_start, clip_end):
             end = start + MAX_CUE_LEN
         if end <= start:
             continue
-        cleaned.append({
+        item = {
             "start": round(start, 3),
             "end": round(end, 3),
-            "emotion": emotion,
+            "query": query,
             "note": str(c.get("note", "") or "").strip(),
-        })
+        }
+        emotion = str(c.get("emotion", "")).strip().lower()
+        if emotion:
+            item["emotion"] = emotion
+        cleaned.append(item)
         if len(cleaned) >= MAX_CUES_PER_CLIP:
             break
     cleaned.sort(key=lambda c: c["start"])
@@ -187,7 +249,7 @@ def _clean_cues(cues, clip_start, clip_end):
 
 
 def resolve_cues(clip, seed=0):
-    """Pick library files for each cue of a clip. Returns resolved cue list."""
+    """Fetch/cache stock files for each cue. Returns resolved cue list."""
     cues = _clean_cues(clip.get("broll"), clip["start"], clip["end"])
     if not cues:
         return []
@@ -195,37 +257,33 @@ def resolve_cues(clip, seed=0):
     used = set()
     resolved = []
     for cue in cues:
-        path = _pick(cue["emotion"], used, rng)
+        path = _pick(cue["query"], used, rng)
         if path is None:
-            print(f"[broll] no library asset for '{cue['emotion']}' "
-                  f"(drop clips/images into {library_dir() / cue['emotion']} "
-                  f"or set PEXELS_API_KEY/PIXABAY_API_KEY and run broll fetch)")
+            print(f"[broll] no stock asset for '{cue['query']}'")
             continue
         used.add(path.name)
-        resolved.append({**cue, "file": str(path),
-                         "kind": "image" if path.suffix.lower() in IMAGE_EXTS else "video"})
+        resolved.append({
+            **cue,
+            "file": str(path),
+            "kind": "image" if path.suffix.lower() in IMAGE_EXTS else "video",
+        })
     return resolved
 
 
 def fetch_missing(progress=None):
-    """Fill empty emotion slots from configured providers. Returns counts."""
-    library_dir().mkdir(parents=True, exist_ok=True)
-    report = {}
-    emotions = [e for e in VALID_EMOTIONS if not _library_files(e)]
-    for i, emotion in enumerate(emotions):
-        print(f"[broll] fetching stock for '{emotion}'")
-        n = _fetch_pexels(emotion)
-        if n == 0:
-            n = _fetch_pixabay(emotion)
-        report[emotion] = n
-        if progress:
-            progress((i + 1) / max(1, len(emotions)))
-    return report
+    """B-roll is fetched per clip in build_manifest. Reports provider status."""
+    if progress:
+        progress(1.0)
+    return {
+        "pexels": bool(config.broll_pexels_key),
+        "pixabay": bool(config.broll_pixabay_key),
+    }
 
 
 def build_manifest(video_stem, clips):
-    """Resolve b-roll for every clip and persist data/broll/<stem>_broll.json."""
+    """Fetch stock for every clip cue and persist data/broll/<stem>_broll.json."""
     library_dir().mkdir(parents=True, exist_ok=True)
+    cache_root().mkdir(parents=True, exist_ok=True)
     entries = []
     for i, clip in enumerate(clips, start=1):
         resolved = resolve_cues(clip, seed=i)
@@ -247,8 +305,3 @@ def read_manifest(video_stem):
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
-
-
-def slugify(text, n=40):
-    slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
-    return slug[:n] or "clip"

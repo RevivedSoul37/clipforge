@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -30,6 +31,7 @@ for _stream in ("stdout", "stderr"):
 
 from src.config import config  # noqa: E402
 from src import campaigns as camp_mod  # noqa: E402
+from src import email_highlights  # noqa: E402
 
 WEB_DIR = ROOT / "web"
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -37,6 +39,31 @@ MAX_LOGS = 4000
 
 RUNS = {}          # run_id -> dict(status, logs, percent, stage, message, command, exit_code)
 RUNS_LOCK = threading.Lock()
+
+# --------------------------------------------------------------------------- #
+# event bus — feeds /api/events (notifications) and the UI notification centre
+# --------------------------------------------------------------------------- #
+EVENTS_LOCK = threading.Lock()
+EVENTS = []           # list of {seq, ts, kind, data}; bounded ring
+EVENT_COUNTER = 0
+EVENT_WAITERS = []    # list of threading.Event
+
+
+def publish_event(kind, data=None):
+    """Append an event to the bounded ring and wake /api/events listeners."""
+    global EVENT_COUNTER
+    with EVENTS_LOCK:
+        EVENT_COUNTER += 1
+        EVENTS.append({
+            "seq": EVENT_COUNTER,
+            "ts": time.time(),
+            "kind": str(kind),
+            "data": data or {},
+        })
+        if len(EVENTS) > 500:
+            del EVENTS[:len(EVENTS) - 500]
+        for waiter in EVENT_WAITERS:
+            waiter.set()
 
 
 # --------------------------------------------------------------------------- #
@@ -90,6 +117,13 @@ def _run_subprocess(run_id, argv):
                 run["message"] = data.get("message", "")
             # mirror to the backend console as a compact status line
             print(f"   [{data.get('percent', 0):>5.1f}%] {data.get('stage')} - {data.get('message', '')}", flush=True)
+        elif line.startswith("@@EVENT@@"):
+            try:
+                ev = json.loads(line.split(" ", 1)[1])
+                publish_event(ev.get("kind", "unknown"), ev.get("data"))
+            except Exception:  # noqa: BLE001
+                pass
+            continue
         else:
             with RUNS_LOCK:
                 run["logs"].append(line)
@@ -115,7 +149,7 @@ def _run_subprocess(run_id, argv):
     print(f"\n<<< run {run_id} finished ({run['status']})\n", flush=True)
 
 
-def start_run(argv):
+def start_run(argv, campaign_id=None, video_id=None):
     run_id = uuid.uuid4().hex[:12]
     with RUNS_LOCK:
         RUNS[run_id] = {
@@ -123,6 +157,7 @@ def start_run(argv):
             "percent": 0, "stage": "start", "message": "Starting",
             "command": "", "exit_code": None, "error": None,
             "cancelled": False, "proc": None,
+            "campaign_id": campaign_id, "video_id": video_id,
         }
     threading.Thread(target=_run_subprocess, args=(run_id, argv), daemon=True).start()
     return run_id
@@ -192,6 +227,11 @@ def _candidates_dir(campaign_id=None):
     return config.candidates_dir
 
 
+def _email_status_for(video_id, campaign_id=None):
+    from src import email_status
+    return email_status.read_status(_candidates_dir(campaign_id), video_id)
+
+
 def _frames_dir(campaign_id=None):
     if campaign_id:
         return config.campaign_root(campaign_id) / "frames"
@@ -231,9 +271,10 @@ def _list_templates(campaign_id=None):
             d = json.loads(p.read_text(encoding="utf-8"))
             out.append({
                 "name": d.get("name", p.stem),
-                "label": d.get("name", p.stem),
+                "label": d.get("label") or d.get("name", p.stem),
                 "description": d.get("description", ""),
                 "file": p.name,
+                "golden": bool(d.get("golden")),
             })
         except Exception:  # noqa: BLE001
             continue
@@ -271,6 +312,54 @@ def _media_list(video_id, base_dir, prefix=""):
             out.append({"name": p.name, "size": p.stat().st_size,
                         "url": f"/api/media?path={p.relative_to(ROOT).as_posix()}"})
     return out
+
+
+def _run_busy(campaign_id=None, video_id=None):
+    with RUNS_LOCK:
+        for run in RUNS.values():
+            if run["status"] not in ("running", "queued"):
+                continue
+            if campaign_id and run.get("campaign_id") != campaign_id:
+                continue
+            if video_id and run.get("video_id") != video_id:
+                continue
+            return True
+    return False
+
+
+def _public(camp, detail=False):
+    out = camp.public(detail=detail)
+    out["processing_status"] = "running" if _run_busy(camp.id) else "idle"
+    return out
+
+
+def _source_counts(camp, stem):
+    data = camp.candidates_for(stem) or {}
+    clips = data.get("clips") if isinstance(data.get("clips"), list) else []
+    approved = sum(1 for c in clips if c.get("status") == "approved")
+    outputs = _media_list(stem, camp.output_dir)
+    return {
+        "candidates": len(clips),
+        "approved": approved,
+        "exported": len(outputs),
+        "outputs": outputs,
+        "clips": clips,
+        "data": data,
+    }
+
+
+def _transcript_snippet(segments, start, end, limit=220):
+    parts = []
+    for s in segments or []:
+        try:
+            if float(s.get("end", 0)) > float(start) and float(s.get("start", 0)) < float(end):
+                parts.append(str(s.get("text") or "").strip())
+        except (TypeError, ValueError):
+            continue
+    text = " ".join(p for p in parts if p).strip()
+    if len(text) > limit:
+        return text[:limit].rstrip() + "…"
+    return text
 
 
 def _safe_resolve(rel):
@@ -311,7 +400,10 @@ async def index(request):
 async def api_state(request):
     campaign_id = _cid(request)
     camp = _camp(campaign_id)
-    default_tpl = str(camp.template_path) if camp and camp.has_template() else config.default_template
+    settings = camp.settings() if camp else {}
+    default_tpl = settings.get("default_template") if camp else None
+    if not default_tpl:
+        default_tpl = str(camp.template_path) if camp and camp.has_template() else config.default_template
     return JSONResponse({
         "videos": _list_videos(campaign_id),
         "templates": _list_templates(campaign_id),
@@ -319,8 +411,8 @@ async def api_state(request):
         "config": {
             "llm_model": config.llm_model,
             "whisper_model": config.whisper_model,
-            "min_score": config.llm_min_score,
-            "max_clips": config.llm_max_clips,
+            "min_score": settings.get("min_score", config.llm_min_score) if camp else config.llm_min_score,
+            "max_clips": settings.get("max_clips", config.llm_max_clips) if camp else config.llm_max_clips,
             "default_template": default_tpl,
             "input_dir": str(_input_dir(campaign_id)),
             "output_dir": str(_output_dir(campaign_id)),
@@ -384,7 +476,7 @@ async def api_run(request):
         return JSONResponse({"error": "missing 'video'"}, status_code=400)
 
     if mode not in ("analyze", "export", "pipeline", "transcribe", "context",
-                    "select", "cut", "render", "broll", "frames", "style"):
+                    "select", "cut", "render", "frames", "style", "explore-style"):
         return JSONResponse({"error": f"unknown mode {mode}"}, status_code=400)
 
     argv = [mode, _resolve_video_arg(video, campaign_id)]
@@ -405,6 +497,8 @@ async def api_run(request):
             argv += ["--template", template]
         if auto:
             argv += ["--auto"]
+        if data.get("instructions"):
+            argv += ["--instructions", str(data["instructions"])]
     elif mode == "pipeline":
         if template:
             argv += ["--template", template]
@@ -425,8 +519,6 @@ async def api_run(request):
             argv += ["--min-score", str(min_score)]
         if max_clips is not None:
             argv += ["--max-clips", str(max_clips)]
-    elif mode == "broll":
-        argv += ["--fetch"]
     elif mode == "frames":
         if data.get("frames_mode"):
             argv += ["--mode", str(data["frames_mode"])]
@@ -439,12 +531,22 @@ async def api_run(request):
             argv += ["--name", str(data["name"])]
         if data.get("cta_text"):
             argv += ["--cta-text", str(data["cta_text"])]
+    elif mode == "explore-style":
+        if data.get("brief"):
+            argv += ["--brief", str(data["brief"])]
+        if data.get("variants") is not None:
+            argv += ["--variants", str(int(data["variants"]))]
+        if data.get("probe") is not None:
+            argv += ["--probe", str(int(data["probe"]))]
+        if auto:
+            argv += ["--auto"]
     elif mode == "cut":
         if auto:
             argv += ["--auto"]
     # transcribe / context take no extra args from the UI
 
-    run_id = start_run(argv)
+    video_id = Path(video).stem if video else None
+    run_id = start_run(argv, campaign_id=campaign_id, video_id=video_id)
     return JSONResponse({"run": run_id})
 
 
@@ -524,22 +626,19 @@ async def api_save_candidates(request):
         cleaned.append(item)
     cur["clips"] = cleaned
     p.write_text(json.dumps(cur, ensure_ascii=False, indent=2), encoding="utf-8")
+    camp = _camp(campaign_id)
+    if camp:
+        camp.touch()
+        camp_mod.sync_clips_from_candidates(camp, video_id, cleaned, status="reviewing")
     return JSONResponse({"ok": True, "count": len(cleaned)})
 
 
 async def api_broll(request):
-    from src.fetch_broll import VALID_EMOTIONS, VIDEO_EXTS, IMAGE_EXTS
-    emotions = {}
-    for e in VALID_EMOTIONS:
-        d = config.broll_dir / e
-        n = 0
-        if d.is_dir():
-            n = sum(1 for p in d.iterdir()
-                    if p.is_file() and p.suffix.lower() in VIDEO_EXTS + IMAGE_EXTS)
-        emotions[e] = n
+    from src.fetch_broll import cache_stats
+    stats = cache_stats()
     return JSONResponse({
-        "emotions": emotions,
-        "total": sum(emotions.values()),
+        "cache": stats,
+        "total": stats["files"],
         "providers": {
             "pexels": bool(config.broll_pexels_key),
             "pixabay": bool(config.broll_pixabay_key),
@@ -684,6 +783,9 @@ async def api_upload(request):
         return JSONResponse({"error": "uploaded file was empty"}, status_code=400)
 
     print(f"[upload] {raw_name} -> {dest} ({size / 1048576:.1f} MB)", flush=True)
+    camp = _camp(campaign_id)
+    if camp:
+        camp.touch()
     return JSONResponse({"name": dest.name, "id": dest.stem, "size": size})
 
 
@@ -800,7 +902,7 @@ async def api_frames_media(request):
 # --------------------------------------------------------------------------- #
 async def api_campaigns_list(request):
     return JSONResponse({
-        "campaigns": [c.public() for c in camp_mod.list_campaigns()],
+        "campaigns": [_public(c) for c in camp_mod.list_campaigns()],
     })
 
 
@@ -810,22 +912,17 @@ async def api_campaigns_create(request):
     except Exception:  # noqa: BLE001
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
     try:
-        camp = camp_mod.create_campaign(
-            data.get("name"),
-            platform=data.get("platform") or "",
-            payout_rate=data.get("payout_rate") or "",
-            deadline=data.get("deadline") or "",
-        )
+        camp = camp_mod.create_campaign(data.get("name"))
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
-    return JSONResponse(camp.public(detail=True), status_code=201)
+    return JSONResponse(_public(camp, detail=True), status_code=201)
 
 
 async def api_campaign_get(request):
     camp = _camp(request.path_params["campaign_id"])
     if camp is None:
         return JSONResponse({"error": "campaign not found"}, status_code=404)
-    return JSONResponse(camp.public(detail=True))
+    return JSONResponse(_public(camp, detail=True))
 
 
 async def api_campaign_patch(request):
@@ -839,7 +936,100 @@ async def api_campaign_patch(request):
         return JSONResponse({"error": "campaign not found"}, status_code=404)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
-    return JSONResponse(camp.public(detail=True))
+    return JSONResponse(_public(camp, detail=True))
+
+
+async def api_campaign_delete(request):
+    """Delete a campaign and everything in it: sources, transcripts, clips,
+    candidates, style/template files and exported videos."""
+    campaign_id = request.path_params["campaign_id"]
+    if _run_busy(campaign_id):
+        return JSONResponse(
+            {"error": "A pipeline run is in progress - cancel it before deleting this campaign."},
+            status_code=409)
+    camp = _camp(campaign_id)
+    if camp is None:
+        return JSONResponse({"error": "campaign not found"}, status_code=404)
+    try:
+        import shutil
+        shutil.rmtree(camp.root)
+    except OSError as exc:
+        return JSONResponse({"error": f"could not delete campaign: {exc}"},
+                            status_code=500)
+    print(f"[delete] removed campaign {campaign_id} ({camp.root})", flush=True)
+    return JSONResponse({"ok": True, "id": campaign_id})
+
+
+async def api_campaign_sources(request):
+    camp = _camp(request.path_params["campaign_id"])
+    if camp is None:
+        return JSONResponse({"error": "campaign not found"}, status_code=404)
+    sources = []
+    for p in camp.source_files():
+        counts = _source_counts(camp, p.stem)
+        data = counts.get("data") or {}
+        clips = counts.get("clips") or []
+        awaiting = (data.get("highlights_from") == "pending" and not clips)
+        sources.append({
+            "id": p.stem,
+            "name": p.name,
+            "size": p.stat().st_size,
+            "stage": camp.source_stage(p.stem, counts["approved"], counts["exported"]),
+            "candidates": counts["candidates"],
+            "approved": counts["approved"],
+            "exported": counts["exported"],
+            "running": _run_busy(camp.id, p.stem),
+            "awaiting_email": awaiting,
+            "highlights_from": data.get("highlights_from"),
+            "email_status": _email_status_for(p.stem, camp.id),
+        })
+    return JSONResponse({"sources": sources})
+
+
+async def api_campaign_candidates(request):
+    camp = _camp(request.path_params["campaign_id"])
+    if camp is None:
+        return JSONResponse({"error": "campaign not found"}, status_code=404)
+    groups = []
+    for p in camp.source_files():
+        data = camp.candidates_for(p.stem)
+        clips = (data.get("clips") if data and isinstance(data.get("clips"), list) else []) or []
+        segments = _transcript_segments(p.stem, camp.id)
+        items = []
+        for clip in clips:
+            item = dict(clip)
+            item["source_id"] = p.stem
+            item["source_name"] = p.name
+            try:
+                item["snippet"] = _transcript_snippet(
+                    segments, clip.get("start", 0), clip.get("end", 0))
+            except Exception:  # noqa: BLE001
+                item["snippet"] = ""
+            items.append(item)
+        groups.append({
+            "source_id": p.stem,
+            "source_name": p.name,
+            "video_id": (data or {}).get("video_id") or p.stem,
+            "highlights_from": (data or {}).get("highlights_from") or "local",
+            "email_status": _email_status_for(p.stem, camp.id),
+            "clips": items,
+        })
+    return JSONResponse({"groups": groups})
+
+
+async def api_campaign_exports(request):
+    camp = _camp(request.path_params["campaign_id"])
+    if camp is None:
+        return JSONResponse({"error": "campaign not found"}, status_code=404)
+    groups = []
+    for p in camp.source_files():
+        outputs = _media_list(p.stem, camp.output_dir)
+        groups.append({
+            "source_id": p.stem,
+            "source_name": p.name,
+            "outputs": outputs,
+        })
+    return JSONResponse({"groups": groups})
 
 
 async def api_campaign_rules_upload(request):
@@ -928,6 +1118,149 @@ async def api_campaign_clip_patch(request):
     return JSONResponse({"ok": True, "clip": clip})
 
 
+# --------------------------------------------------------------------------- #
+# style exploration
+# --------------------------------------------------------------------------- #
+def _previews_dir(campaign_id=None):
+    if campaign_id:
+        return config.campaign_root(campaign_id) / "previews"
+    return config.previews_dir
+
+
+def _explorations_dir(campaign_id=None):
+    if campaign_id:
+        return config.campaign_root(campaign_id) / "style_explorations"
+    return config.explorations_dir
+
+
+async def api_exploration_get(request):
+    """Return the exploration report + preview URLs for a video stem."""
+    video_id = request.path_params["video_id"]
+    campaign_id = _cid(request)
+    report = _read_json(_explorations_dir(campaign_id) / f"{video_id}_exploration.json")
+    if report is None:
+        return JSONResponse({"error": f"no exploration for '{video_id}'"},
+                            status_code=404)
+    pdir = _previews_dir(campaign_id) / video_id
+    for v in report.get("variants", []):
+        url = None
+        if v.get("file"):
+            p = pdir / v["file"]
+            if p.is_file():
+                url = f"/api/media?path={p.relative_to(ROOT).as_posix()}"
+        v["preview_url"] = url
+        frames = []
+        for fn in v.get("frames", []):
+            fp = pdir / fn
+            if fp.is_file():
+                frames.append(f"/api/media?path={fp.relative_to(ROOT).as_posix()}")
+        v["frame_urls"] = frames
+    winner_name = report.get("winner")
+    if winner_name:
+        wp = config.root / "templates" / f"{video_id}_winner.json"
+        report["winner_template"] = wp.name if wp.is_file() else None
+    return JSONResponse(report)
+
+
+async def api_exploration_save(request):
+    """Copy the exploration winner into the campaign template (template.json),
+    making it the campaign's default style for future exports."""
+    video_id = request.path_params["video_id"]
+    campaign_id = _cid(request)
+    camp = _camp(campaign_id)
+    if camp is None:
+        return JSONResponse({"error": "campaign not found"}, status_code=404)
+    src = config.root / "templates" / f"{video_id}_winner.json"
+    if not src.is_file():
+        return JSONResponse({"error": f"no winner template for '{video_id}'"},
+                            status_code=404)
+    try:
+        tpl = json.loads(src.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return JSONResponse({"error": f"winner template unreadable: {exc}"},
+                            status_code=500)
+    tpl["name"] = f"{camp.id}_style"
+    tpl["golden"] = True
+    tpl["label"] = "Style Explorer winner"
+    camp.template_path.parent.mkdir(parents=True, exist_ok=True)
+    camp.template_path.write_text(json.dumps(tpl, ensure_ascii=False, indent=2),
+                                  encoding="utf-8")
+    camp.touch()
+    print(f"[explore] saved winner template -> {camp.template_path}", flush=True)
+    return JSONResponse({"ok": True, "template_path": str(camp.template_path)})
+
+
+async def api_events(request):
+    """Long-poll: returns events with seq > `since`. Waits up to `timeout` s
+    for new events before returning (so the browser gets near-realtime updates
+    without websockets)."""
+    import anyio
+
+    try:
+        since = int(request.query_params.get("since", "0") or 0)
+    except ValueError:
+        since = 0
+    try:
+        timeout = min(120.0, max(1.0, float(request.query_params.get("timeout", "25") or 25)))
+    except ValueError:
+        timeout = 25.0
+
+    def _snapshot(since_seq):
+        with EVENTS_LOCK:
+            return [e for e in EVENTS if e["seq"] > since_seq]
+
+    fresh = _snapshot(since)
+    if fresh:
+        return JSONResponse({"events": fresh, "next": EVENTS[-1]["seq"] if EVENTS else since})
+
+    # Wait for at least one new event or until timeout.
+    waiter = threading.Event()
+    with EVENTS_LOCK:
+        EVENT_WAITERS.append(waiter)
+    try:
+        await anyio.to_thread.run_sync(lambda: waiter.wait(timeout))
+    finally:
+        with EVENTS_LOCK:
+            if waiter in EVENT_WAITERS:
+                EVENT_WAITERS.remove(waiter)
+
+    fresh = _snapshot(since)
+    next_seq = 0
+    with EVENTS_LOCK:
+        next_seq = EVENTS[-1]["seq"] if EVENTS else since
+    return JSONResponse({"events": fresh, "next": next_seq})
+
+
+async def api_email_status(request):
+    """Return email-pipeline status for a single source video."""
+    video_id = request.path_params["video_id"]
+    campaign_id = _cid(request)
+    status = _email_status_for(video_id, campaign_id)
+    return JSONResponse({"video_id": video_id, "status": status})
+
+
+async def api_email_check(request):
+    """Trigger an immediate inbox poll (used by a 'Check now' button)."""
+    results = email_highlights.poll_highlight_emails(
+        on_ingested=lambda summary: publish_event("highlights_received", summary))
+    return JSONResponse({"ingested": len(results), "video_ids": [s.get("video_id") for s in results]})
+
+
+async def api_transcript_view(request):
+    """Return the formatted transcript body for a video (for the approval
+    page to display the transcript on-screen)."""
+    video_id = request.path_params["video_id"]
+    campaign_id = _cid(request)
+    from src.clean_transcript import best_transcript_path
+    from src.email_transcript import build_transcript_body
+    path = best_transcript_path(video_id, transcripts_dir=_transcripts_dir(campaign_id))
+    data = _read_json(path)
+    if not data:
+        return JSONResponse({"error": "no transcript"}, status_code=404)
+    body = build_transcript_body(data, video_id=video_id)
+    return JSONResponse({"body": body, "video_id": video_id})
+
+
 async def api_open_folder(request):
     directory = request.query_params.get("dir", "output")
     campaign_id = _cid(request)
@@ -970,24 +1303,50 @@ routes = [
     Route("/api/frames/{stem}/style", api_style_report, methods=["GET"]),
     Route("/api/frames/{stem}/media", api_frames_media, methods=["GET"]),
     Route("/api/open-folder", api_open_folder, methods=["POST"]),
+    Route("/api/events", api_events, methods=["GET"]),
+    Route("/api/email/check", api_email_check, methods=["POST"]),
+    Route("/api/email/status/{video_id}", api_email_status, methods=["GET"]),
+    Route("/api/transcript/{video_id}", api_transcript_view, methods=["GET"]),
     Route("/api/campaigns", api_campaigns_list, methods=["GET"]),
     Route("/api/campaigns", api_campaigns_create, methods=["POST"]),
     Route("/api/campaigns/{campaign_id}", api_campaign_get, methods=["GET"]),
     Route("/api/campaigns/{campaign_id}", api_campaign_patch, methods=["PATCH"]),
+    Route("/api/campaigns/{campaign_id}", api_campaign_delete, methods=["DELETE"]),
     Route("/api/campaigns/{campaign_id}/rules", api_campaign_rules_upload, methods=["POST"]),
     Route("/api/campaigns/{campaign_id}/rules", api_campaign_rules_patch, methods=["PATCH"]),
     Route("/api/campaigns/{campaign_id}/rules/file", api_campaign_rules_file, methods=["GET"]),
     Route("/api/campaigns/{campaign_id}/clips/{clip_id}", api_campaign_clip_patch, methods=["PATCH"]),
+    Route("/api/campaigns/{campaign_id}/sources", api_campaign_sources, methods=["GET"]),
+    Route("/api/campaigns/{campaign_id}/candidates", api_campaign_candidates, methods=["GET"]),
+    Route("/api/campaigns/{campaign_id}/exports", api_campaign_exports, methods=["GET"]),
+    Route("/api/exploration/{video_id}", api_exploration_get, methods=["GET"]),
+    Route("/api/exploration/{video_id}/save-to-campaign", api_exploration_save, methods=["POST"]),
     Mount("/static", app=StaticFiles(directory=str(WEB_DIR)), name="static"),
 ]
 
 app = Starlette(routes=routes)
 
 
+def _email_poll_loop():
+    """Background poller: ingest AI highlight replies from the inbox and
+    publish UI events so the approval page / notifications update live."""
+    while True:
+        try:
+            email_highlights.poll_highlight_emails(
+                on_ingested=lambda summary: publish_event("highlights_received", summary))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[email] poll failed: {exc}", flush=True)
+        time.sleep(30)
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8600
     config.ensure_dirs()
+    if config.smtp_user and config.smtp_pass and config.highlight_reply_sender:
+        threading.Thread(target=_email_poll_loop, name="email-poll", daemon=True).start()
+        print(f"  Email highlights: watching inbox for replies from "
+              f"{config.highlight_reply_sender}.")
     print("=" * 60)
     print("  ClipForge - AI auto-clipper")
     print(f"  Web UI:  http://localhost:{port}")

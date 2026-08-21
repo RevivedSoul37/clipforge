@@ -258,7 +258,8 @@ def draft_template(report, name, cta_text="Follow for more!"):
     """Turn a style report into a draft template JSON."""
     layout = report["layout"]
     crop = {"mode": layout if layout != "full_frame" else "letterbox",
-            "background": "#000000"}
+            "background": "#000000",
+            "follow_speaker": layout == "square_band"}
 
     t = {
         "name": name,
@@ -268,19 +269,19 @@ def draft_template(report, name, cta_text="Follow for more!"):
         "crop": crop,
         "hook": {"enabled": True, "font": "Bebas Neue", "size": 110,
                  "color": report["hook"]["median_hex"] or "#FAF8E6",
-                 "position": "top", "margin_v": 160},
+                 "position": "top", "margin_v": 180},
         "captions": {
             "enabled": True, "font": "Poppins-Bold", "size": 76,
             "color": report["captions"]["median_hex"] or "#FAF8E6",
             "outline_color": "#000000", "outline_width": 4,
-            "position": "bottom_center", "margin_v": 340, "max_words": 4,
+            "position": "bottom_center", "margin_v": 250, "max_words": 4,
             "highlight_keyword": {
                 "enabled": bool(report["captions"]["keyword_hex"]),
                 "color": report["captions"]["keyword_hex"] or "#E00000",
             },
         },
         "music": {"enabled": True, "volume": 0.12},
-        "broll": {"enabled": False},
+        "broll": {"enabled": False, "mode": "cutaway", "pip_scale": 0.6},
         "intro": {"enabled": False},
         "outro": {"enabled": False},
         "watermark": {"enabled": False},

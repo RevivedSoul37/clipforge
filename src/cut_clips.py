@@ -73,8 +73,10 @@ def _ffmpeg_cut(video_path, start, end, out_path, src_size=None):
 
 
 def _pad(start, end, duration, lead_in=None, lead_out=None):
-    lead_in = lead_in if lead_in is not None else config.lead_in
-    lead_out = lead_out if lead_out is not None else config.lead_out
+    if lead_in is None:
+        lead_in = min(config.lead_in, 0.08) if config.vad_enabled else config.lead_in
+    if lead_out is None:
+        lead_out = min(config.lead_out, 0.1) if config.vad_enabled else config.lead_out
     start = max(0.0, float(start) - lead_in)
     end = min(float(duration), float(end) + lead_out)
     return start, end

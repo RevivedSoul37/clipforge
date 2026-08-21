@@ -24,9 +24,15 @@ from src.llm_client import call_ollama
 CAMPAIGN_STATUSES = ("active", "submitted", "paid", "expired")
 CLIP_STATUSES = ("analyzing", "reviewing", "exported", "posted")
 RULES_EXTS = {".pdf", ".docx", ".txt", ".md"}
+VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 SAFE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,80}$")
 RULE_LIST_SECTIONS = ("content_criteria", "brand_safety", "editing_style")
 RULE_SECTIONS = RULE_LIST_SECTIONS + ("submission_requirements",)
+SETTINGS_KEYS = (
+    "min_score", "max_clips", "default_template",
+    "music_enabled", "music_track", "music_volume",
+    "local_highlights", "style_brief", "edit_instructions",
+)
 
 EMPTY_RULES = {
     "content_criteria": [],
@@ -34,6 +40,21 @@ EMPTY_RULES = {
     "editing_style": [],
     "submission_requirements": "",
     "submission_done": False,
+}
+
+DEFAULT_SETTINGS = {
+    "min_score": 0.5,
+    "max_clips": 10,
+    "default_template": "square_captioned",
+    "music_enabled": True,
+    "music_track": "",
+    "music_volume": 0.12,
+    "style_brief": "",
+    "edit_instructions": "",
+    # "local_highlights" is not stored here: normalize_settings() defaults it
+    # from config.local_highlights (HIGHLIGHT_SOURCE in .env), so campaigns
+    # created under either mode follow the env default unless the user
+    # explicitly toggles the setting.
 }
 
 SUMMARIZE_SYSTEM = (
@@ -67,6 +88,62 @@ def _read_json(path: Path, default=None):
 def _write_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def default_settings() -> dict:
+    return dict(DEFAULT_SETTINGS)
+
+
+def normalize_settings(data) -> dict:
+    out = default_settings()
+    # Global default for the highlight toggle comes from .env (HIGHLIGHT_SOURCE);
+    # an explicit per-campaign value below overrides it.
+    out["local_highlights"] = config.local_highlights
+    if not isinstance(data, dict):
+        return out
+    if "min_score" in data:
+        try:
+            out["min_score"] = min(1.0, max(0.0, float(data["min_score"])))
+        except (TypeError, ValueError):
+            pass
+    if "max_clips" in data:
+        try:
+            out["max_clips"] = min(30, max(1, int(data["max_clips"])))
+        except (TypeError, ValueError):
+            pass
+    if "default_template" in data:
+        out["default_template"] = str(data["default_template"] or "").strip() or out["default_template"]
+    if "music_enabled" in data:
+        out["music_enabled"] = bool(data["music_enabled"])
+    if "music_track" in data:
+        out["music_track"] = str(data["music_track"] or "")
+    if "music_volume" in data:
+        try:
+            out["music_volume"] = min(1.0, max(0.0, float(data["music_volume"])))
+        except (TypeError, ValueError):
+            pass
+    if "local_highlights" in data:
+        v = data["local_highlights"]
+        if isinstance(v, str):
+            out["local_highlights"] = v.strip().lower() in ("1", "true", "yes", "on", "local")
+        else:
+            out["local_highlights"] = bool(v)
+    if "style_brief" in data:
+        out["style_brief"] = str(data["style_brief"] or "").strip()
+    if "edit_instructions" in data:
+        out["edit_instructions"] = str(data["edit_instructions"] or "").strip()
+    return out
+
+
+def merge_settings(current, patch) -> dict:
+    base = normalize_settings(current)
+    if not isinstance(patch, dict):
+        return base
+    merged = dict(base)
+    for key in SETTINGS_KEYS:
+        if key in patch:
+            merged[key] = patch[key]
+    return normalize_settings(merged)
 
 
 def _slug(name: str) -> str:
@@ -131,6 +208,14 @@ class Campaign:
         return self.root / "frames"
 
     @property
+    def previews_dir(self) -> Path:
+        return self.root / "previews"
+
+    @property
+    def explorations_dir(self) -> Path:
+        return self.root / "style_explorations"
+
+    @property
     def meta_path(self) -> Path:
         return self.root / "meta.json"
 
@@ -153,11 +238,85 @@ class Campaign:
     def ensure_dirs(self):
         for d in (self.input_dir, self.output_dir, self.raw_dir,
                   self.transcripts_dir, self.context_dir, self.candidates_dir,
-                  self.frames_dir):
+                  self.frames_dir, self.previews_dir, self.explorations_dir):
             d.mkdir(parents=True, exist_ok=True)
 
     def save_meta(self):
+        self.meta["updated_at"] = _now()
         _write_json(self.meta_path, self.meta)
+
+    def touch(self):
+        self.save_meta()
+
+    def settings(self) -> dict:
+        return normalize_settings(self.meta.get("settings"))
+
+    def has_transcript(self, stem: str) -> bool:
+        d = self.transcripts_dir
+        return (d / f"{stem}_transcript.json").is_file() or \
+            (d / f"{stem}_transcript_clean.json").is_file()
+
+    def candidates_path_for(self, stem: str) -> Path:
+        return self.candidates_dir / f"{stem}_candidates.json"
+
+    def candidates_for(self, stem: str):
+        data = _read_json(self.candidates_path_for(stem))
+        return data if isinstance(data, dict) else None
+
+    def source_stage(self, stem: str, approved_count=0, exported_count=0) -> str:
+        if exported_count:
+            return "exported"
+        if approved_count:
+            return "has_approved"
+        data = self.candidates_for(stem)
+        if data is not None:
+            if data.get("highlights_from") == "pending" and not data.get("clips"):
+                return "awaiting"
+            return "analysed"
+        if self.has_transcript(stem):
+            return "transcribed"
+        return "uploaded"
+
+    def source_files(self) -> list[Path]:
+        folder = self.input_dir
+        if not folder.is_dir():
+            return []
+        return sorted(
+            p for p in folder.iterdir()
+            if p.is_file() and p.suffix.lower() in VIDEO_EXTS
+        )
+
+    def funnel(self) -> dict:
+        sources = self.source_files()
+        transcribed = analysed = candidates = approved = 0
+        for p in sources:
+            if self.has_transcript(p.stem):
+                transcribed += 1
+            data = self.candidates_for(p.stem)
+            if data is not None:
+                analysed += 1
+                clips = data.get("clips") if isinstance(data.get("clips"), list) else []
+                candidates += len(clips)
+                approved += sum(1 for c in clips if c.get("status") == "approved")
+        exported = 0
+        out = self.output_dir
+        if out.is_dir():
+            stems = {p.stem for p in sources}
+            seen = set()
+            for p in out.iterdir():
+                if p.suffix.lower() not in VIDEO_EXTS or p.name in seen:
+                    continue
+                if p.stem in stems or any(p.stem.startswith(s + "_") for s in stems):
+                    seen.add(p.name)
+                    exported += 1
+        return {
+            "sources": len(sources),
+            "transcribed": transcribed,
+            "analysed": analysed,
+            "candidates": candidates,
+            "approved": approved,
+            "exported": exported,
+        }
 
     def rules_summary(self) -> dict:
         data = _read_json(self.rules_summary_path)
@@ -177,6 +336,7 @@ class Campaign:
 
     def write_rules_summary(self, data):
         _write_json(self.rules_summary_path, normalize_rules(data))
+        self.touch()
 
     def has_rules(self) -> bool:
         r = self.rules_summary()
@@ -211,23 +371,24 @@ class Campaign:
         return self.template_path.is_file()
 
     def public(self, detail=False) -> dict:
+        settings = self.settings()
         out = {
             "id": self.meta.get("id"),
             "name": self.meta.get("name"),
-            "platform": self.meta.get("platform") or "",
-            "payout_rate": self.meta.get("payout_rate") or "",
-            "deadline": self.meta.get("deadline") or "",
-            "status": self.meta.get("status") or "active",
             "created_at": self.meta.get("created_at") or "",
-            "clip_counts": self.clip_counts(),
+            "updated_at": self.meta.get("updated_at") or self.meta.get("created_at") or "",
+            "preset_id": self.meta.get("preset_id"),
+            "speakers": self.meta.get("speakers") if isinstance(self.meta.get("speakers"), list) else [],
+            "settings": settings,
+            "funnel": self.funnel(),
+            "processing_status": "idle",
+            "has_rules": self.has_rules(),
             "has_template": self.has_template(),
         }
         if detail:
             full = self.rules_full_path()
             out["rules_summary"] = self.rules_summary()
-            out["has_rules"] = self.has_rules()
             out["rules_full"] = full.name if full else None
-            out["clips"] = self.clips()
         return out
 
 
@@ -243,7 +404,7 @@ def list_campaigns() -> list[Campaign]:
         if not isinstance(meta, dict) or not meta.get("id"):
             continue
         out.append(Campaign(meta))
-    out.sort(key=lambda c: c.meta.get("created_at") or "", reverse=True)
+    out.sort(key=lambda c: c.meta.get("updated_at") or c.meta.get("created_at") or "", reverse=True)
     return out
 
 
@@ -258,19 +419,20 @@ def get_campaign(campaign_id: str) -> Campaign | None:
     return camp
 
 
-def create_campaign(name, platform="", payout_rate="", deadline="") -> Campaign:
+def create_campaign(name) -> Campaign:
     name = (name or "").strip()
     if not name:
         raise ValueError("name is required")
+    now = _now()
     cid = f"{_slug(name)}-{uuid.uuid4().hex[:6]}"
     meta = {
         "id": cid,
         "name": name,
-        "platform": (platform or "").strip(),
-        "payout_rate": (payout_rate or "").strip(),
-        "deadline": (deadline or "").strip(),
-        "status": "active",
-        "created_at": _now(),
+        "created_at": now,
+        "updated_at": now,
+        "preset_id": None,
+        "speakers": [],
+        "settings": default_settings(),
     }
     camp = Campaign(meta)
     camp.ensure_dirs()
@@ -285,21 +447,16 @@ def update_campaign(campaign_id: str, fields: dict) -> Campaign:
     camp = get_campaign(campaign_id)
     if camp is None:
         raise FileNotFoundError(f"campaign not found: {campaign_id}")
-    allowed = {"name", "platform", "payout_rate", "deadline", "status"}
-    for key, val in fields.items():
-        if key not in allowed:
-            continue
-        if key == "status":
-            if val not in CAMPAIGN_STATUSES:
-                raise ValueError(f"status must be one of {CAMPAIGN_STATUSES}")
-            camp.meta["status"] = val
-        elif key == "name":
-            name = str(val or "").strip()
-            if not name:
-                raise ValueError("name cannot be empty")
-            camp.meta["name"] = name
-        else:
-            camp.meta[key] = str(val or "").strip()
+    if "name" in fields:
+        name = str(fields.get("name") or "").strip()
+        if not name:
+            raise ValueError("name cannot be empty")
+        camp.meta["name"] = name
+    if "settings" in fields:
+        camp.meta["settings"] = merge_settings(camp.meta.get("settings"), fields.get("settings"))
+    if "preset_id" in fields:
+        val = fields.get("preset_id")
+        camp.meta["preset_id"] = None if val in (None, "") else str(val)
     camp.save_meta()
     return camp
 

@@ -10,6 +10,13 @@ output/
 music/
 data/
 
+# generated style-explorer artifacts (auto-written per video, not hand-authored)
+templates/*_winner.json
+
+# Kilo agent state (plans archived under private/plans/, skills are local)
+.kilo/plans/
+.kilo/skills/
+
 # OS junk
 Thumbs.db
 desktop.ini

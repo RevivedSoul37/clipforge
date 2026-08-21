@@ -3,90 +3,192 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ClipForge — AI auto-clipper</title>
-  <link rel="stylesheet" href="/static/style.css?v=11">
+  <title>ClipForge</title>
+  <link rel="stylesheet" href="/static/style.css?v=15">
 </head>
 <body>
   <div class="app">
     <header class="topbar">
-      <div class="brand">
-        <div class="logo" aria-hidden="true">CF</div>
+      <a class="brand" href="#/dashboard">
+        <div class="logo" aria-hidden="true"></div>
         <div class="brand-text">
           <h1>ClipForge</h1>
-          <p class="tagline">Long video in, post-ready clips out</p>
+          <p class="tagline">Long-form in, 9:16 out</p>
         </div>
-      </div>
+      </a>
       <nav class="nav" id="nav">
-        <a href="#/dashboard" data-page="dashboard">Dashboard</a>
-        <a href="#/campaign" data-page="campaign" id="navCampaign" hidden></a>
-        <span class="nav-pipeline" id="navPipeline" hidden>
-          <a href="#/source" data-page="source">Source</a>
-          <a href="#/analyze" data-page="analyze">Analyze</a>
-          <a href="#/review" data-page="review">Review</a>
-          <a href="#/export" data-page="export">Export</a>
-          <a href="#/style" data-page="style">Style Lab</a>
-        </span>
+        <a href="#/dashboard" data-page="dashboard">Campaigns</a>
+        <a href="#/campaign" data-page="overview" id="navCampaign" hidden></a>
       </nav>
       <div class="topbar-meta">
+        <div class="bell-wrap">
+          <button class="bell" id="bellBtn" title="Notifications" aria-label="Notifications">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.1-1.6-5.6-4.5-6.3V4c0-.8-.7-1.5-1.5-1.5S10.5 3.2 10.5 4v.7C7.6 5.4 6 7.9 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+            <span class="bell-badge" id="bellBadge" hidden>0</span>
+          </button>
+          <div class="bell-dropdown" id="bellDropdown" hidden>
+            <div class="bell-head"><span>Notifications</span><button class="link" id="bellClear">Clear</button></div>
+            <div class="bell-list" id="bellList"><p class="empty">No notifications yet.</p></div>
+          </div>
+        </div>
         <span class="chip" id="modelChip">…</span>
         <span class="status" id="serverStatus"><i></i><span id="serverStatusText">connecting</span></span>
       </div>
     </header>
 
-    <!-- global "what am I working on" bar -->
-    <div class="contextbar" id="contextBar" hidden>
-      <span class="ctx-label">Working on</span>
-      <div class="select-wrap ctx-select"><select id="videoSelectTop"></select></div>
-      <span class="ctx-stats" id="ctxStats"></span>
-    </div>
+    <div class="workspace" id="workspace">
+      <nav class="sidenav" id="sideNav" hidden>
+        <a href="#/campaign" data-page="overview">Overview</a>
+        <a href="#/campaign/sources" data-page="sources">Sources</a>
+        <a href="#/campaign/approval" data-page="approval">Approval</a>
+        <a href="#/campaign/candidates" data-page="candidates">Candidates</a>
+        <a href="#/campaign/approved" data-page="approved">Approved</a>
+        <a href="#/campaign/exports" data-page="exports">Exports</a>
+        <a href="#/campaign/settings" data-page="settings">Settings</a>
+      </nav>
 
-    <main class="main">
-      <!-- ============ DASHBOARD ============ -->
-      <section class="page" id="page-dashboard">
-        <div class="page-head">
-          <h2>Campaigns</h2>
-          <p class="page-sub">Each campaign has its own brief, footage, and clips.</p>
-        </div>
-        <div class="panel new-campaign-panel" id="newCampaignPanel">
-          <h3 class="eyebrow">New campaign</h3>
-          <form id="newCampaignForm" class="campaign-form">
-            <label class="field"><span>Name</span>
-              <input type="text" id="campName" required placeholder="Whop — June brief"></label>
-            <label class="field"><span>Platform</span>
-              <input type="text" id="campPlatform" placeholder="Whop / TikTok / YouTube"></label>
-            <label class="field"><span>Payout rate</span>
-              <input type="text" id="campPayout" placeholder="$4 / 1k views"></label>
-            <label class="field"><span>Deadline</span>
-              <input type="date" id="campDeadline"></label>
-            <button class="btn btn-primary" type="submit" id="btnCreateCampaign">+ New campaign</button>
-          </form>
-        </div>
-        <div class="campaign-grid" id="campaignGrid"></div>
-      </section>
-
-      <!-- ============ CAMPAIGN DETAIL ============ -->
-      <section class="page" id="page-campaign" hidden>
-        <div class="page-head">
-          <h2 id="campDetailName">Campaign</h2>
-          <div class="page-actions">
-            <label class="field camp-status-field">
-              <span>Status</span>
-              <div class="select-wrap">
-                <select id="campStatus">
-                  <option value="active">Active</option>
-                  <option value="submitted">Submitted</option>
-                  <option value="paid">Paid</option>
-                  <option value="expired">Expired</option>
-                </select>
-              </div>
-            </label>
+      <main class="main">
+        <section class="page" id="page-dashboard">
+          <div class="page-head">
+            <div>
+              <h2>Campaigns</h2>
+              <p class="page-sub">A bay for each show you cut.</p>
+            </div>
+            <form id="newCampaignForm" class="new-campaign-form">
+              <input type="text" id="campName" required placeholder="Campaign name" autocomplete="off">
+              <button class="btn btn-primary" type="submit" id="btnCreateCampaign">New campaign</button>
+            </form>
           </div>
-        </div>
-        <p class="page-sub camp-meta-line" id="campDetailMeta"></p>
-        <div class="stat-row" id="campStatRow"></div>
-        <div class="grid-2">
+          <div class="campaign-grid" id="campaignGrid"></div>
+        </section>
+
+        <section class="page" id="page-overview" hidden>
+          <div class="page-head">
+            <div>
+              <h2 id="campDetailName">Campaign</h2>
+              <p class="page-sub" id="campDetailMeta"></p>
+            </div>
+            <div class="page-actions">
+              <button class="btn btn-ghost btn-small btn-danger" id="btnDeleteCampaign">Delete campaign</button>
+              <button class="btn btn-primary" id="btnAddSources">Add sources</button>
+            </div>
+          </div>
+          <div class="panel highlight-toggle-panel">
+            <span class="field-label">Highlight selection</span>
+            <div class="seg-toggle" id="highlightToggle" role="radiogroup" aria-label="Highlight selection">
+              <button type="button" class="seg opt" data-mode="email">Email highlights</button>
+              <button type="button" class="seg opt" data-mode="local">Local (Gemma)</button>
+            </div>
+            <p class="hint" id="highlightToggleHint"></p>
+          </div>
+          <ol class="funnel" id="funnel"></ol>
+          <p class="empty" id="overviewEmpty" hidden>Add a source to start this campaign.</p>
+        </section>
+
+        <section class="page" id="page-sources" hidden>
+          <div class="page-head">
+            <div>
+              <h2>Sources</h2>
+              <p class="page-sub">Long-form interviews for this campaign.</p>
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="panel">
+              <h3 class="eyebrow">Library</h3>
+              <div class="source-list" id="sourceList"></div>
+            </div>
+            <div class="panel">
+              <h3 class="eyebrow">Add sources</h3>
+              <label class="dropzone" id="uploadBtn" for="fileInput">
+                <span class="drop-icon">＋</span>
+                <span class="drop-title">Drop a video</span>
+                <span class="drop-sub">mp4 · mov · mkv · webm</span>
+              </label>
+              <input type="file" id="fileInput" accept="video/*" hidden>
+              <div class="upload-progress" id="uploadProgress" hidden>
+                <div class="upload-track"><div class="upload-fill" id="uploadFill"></div></div>
+                <span class="upload-pct" id="uploadPct">0%</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" id="page-approval" hidden>
+          <div class="page-head">
+            <div>
+              <h2>Approval <span class="count" id="approvalCount"></span></h2>
+              <p class="page-sub">Transcripts sent — approve the highlights before clipping starts.</p>
+            </div>
+            <button class="btn btn-small btn-ghost" id="btnEmailCheck">Check inbox now</button>
+          </div>
+          <div id="approvalList" class="source-groups"></div>
+          <div class="empty" id="approvalEmpty" hidden>Analyze a source in email mode to start the transcript → highlights flow.</div>
+        </section>
+
+        <section class="page" id="page-candidates" hidden>
+          <div class="page-head">
+            <div>
+              <h2>Candidates <span class="count" id="reviewCount"></span></h2>
+              <p class="page-sub">Approve the cuts worth posting.</p>
+            </div>
+            <div class="page-actions">
+              <button class="btn btn-small btn-ghost" id="btnApproveAll">Approve all</button>
+              <button class="btn btn-small btn-primary" id="btnSaveReview">Save decisions</button>
+            </div>
+          </div>
+          <p class="hint" id="reviewHint">Decisions stay unsaved until you press Save decisions.</p>
+          <div id="reviewList" class="source-groups"></div>
+          <div class="empty" id="reviewEmpty" hidden>Analyze a source to get candidates.</div>
+        </section>
+
+        <section class="page" id="page-approved" hidden>
+          <div class="page-head">
+            <div>
+              <h2>Approved <span class="count" id="approvedCount"></span></h2>
+              <p class="page-sub">Ready to render.</p>
+            </div>
+          </div>
+          <div id="approvedList" class="source-groups"></div>
+          <div class="empty" id="approvedEmpty" hidden>Approve candidates, then export them here.</div>
+        </section>
+
+        <section class="page" id="page-exports" hidden>
+          <div class="page-head">
+            <div>
+              <h2>Exports <span class="count" id="outputCount"></span></h2>
+              <p class="page-sub">Rendered 9:16 clips.</p>
+            </div>
+            <button class="link" id="btnOpenFolder">Open folder</button>
+          </div>
+          <div class="panel" id="styleExplorerCard">
+            <div class="section-head outputs-head">
+              <h3 class="eyebrow">Style Explorer</h3>
+            </div>
+            <p class="hint">Renders low-res variants of the best clip and lets a local vision model pick the winning style; the winner rolls out to all approved clips on Export.</p>
+            <div class="explore-controls">
+              <label class="field"><span>Video</span>
+                <div class="select-wrap"><select id="exploreVideoSelect"></select></div>
+              </label>
+              <label class="field"><span>Variants</span>
+                <input type="number" id="exploreVariants" value="10" min="2" max="20" step="1">
+              </label>
+              <button class="btn btn-primary" id="btnExploreStyles" disabled>Explore styles</button>
+            </div>
+            <div id="exploreResults" class="explore-results"></div>
+          </div>
+          <div id="outputList"></div>
+        </section>
+
+        <section class="page" id="page-settings" hidden>
+          <div class="page-head">
+            <div>
+              <h2>Settings</h2>
+              <p class="page-sub">Brief, style, music, and run knobs for this campaign.</p>
+            </div>
+          </div>
+
           <div class="panel" id="rulesPanel">
-            <h3 class="eyebrow">Brief / rules</h3>
+            <h3 class="eyebrow">Brief</h3>
             <div id="rulesEmpty">
               <label class="dropzone" id="rulesDropzone" for="rulesInput">
                 <span class="drop-icon">＋</span>
@@ -103,197 +205,102 @@
               </div>
             </div>
           </div>
-          <div class="panel">
-            <h3 class="eyebrow">Pipeline</h3>
-            <p class="hint">Footage, analysis, review and export all stay inside this campaign.</p>
-            <div class="btn-row">
-              <button class="btn btn-primary" id="btnNewClip">New clip from footage →</button>
+
+          <div class="grid-2 settings-grid">
+            <div class="panel">
+              <h3 class="eyebrow">Style</h3>
+              <p class="field-label">Golden look</p>
+              <div class="golden-styles" id="goldenStyles"></div>
+              <select id="templateSelect" hidden></select>
+              <p class="template-desc" id="templateDesc"></p>
+              <div class="analyze-fields">
+                <label class="field"><span>Min score</span>
+                  <input type="number" id="minScore" step="0.05" min="0" max="1"></label>
+                <label class="field"><span>Max clips</span>
+                  <input type="number" id="maxClips" step="1" min="1" max="30"></label>
+              </div>
+              <label class="toggle-row" style="margin-top:10px">
+                <input type="checkbox" id="localHighlights" checked>
+                <span>Local highlight selection (Ollama) &mdash; off: e-mail the transcript and use the AI reply</span>
+              </label>
+            </div>
+            <div class="panel">
+              <h3 class="eyebrow">Sound</h3>
+              <label class="toggle-row">
+                <input type="checkbox" id="musicEnabled">
+                <span>Mix background music under the voice</span>
+              </label>
+              <label class="field"><span>Volume</span>
+                <input type="range" id="musicVolume" min="0" max="1" step="0.02"></label>
+              <label class="field-label">Track</label>
+              <div class="select-wrap music-track-wrap"><select id="musicTrack"></select></div>
+              <label class="upload upload-small" for="musicInput">
+                <span class="upload-icon">＋</span><span>Add a track</span>
+              </label>
+              <input type="file" id="musicInput" accept="audio/*" hidden>
             </div>
           </div>
-        </div>
-        <div class="section-head outputs-head">
-          <h3 class="eyebrow">Clip board</h3>
-        </div>
-        <div class="kanban" id="kanban"></div>
-      </section>
 
-      <!-- ============ 1 · SOURCE ============ -->
-      <section class="page" id="page-source" hidden>
-        <a class="crumb" id="crumbSource" href="#/campaign">← Campaign</a>
-        <div class="page-head">
-          <h2><span class="stepno">1</span> Source video</h2>
-          <p class="page-sub">Pick the long-form video to clip from.</p>
-        </div>
-        <div class="grid-2">
-          <div class="panel">
-            <h3 class="eyebrow">Library</h3>
-            <div class="video-list" id="videoList"></div>
-          </div>
-          <div class="panel">
-            <h3 class="eyebrow">Add a video</h3>
-            <label class="dropzone" id="uploadBtn" for="fileInput">
-              <span class="drop-icon">＋</span>
-              <span class="drop-title">Upload a video</span>
-              <span class="drop-sub">mp4 · mov · mkv · webm — stored in this campaign</span>
-            </label>
-            <input type="file" id="fileInput" accept="video/*" hidden>
-            <div class="upload-progress" id="uploadProgress" hidden>
-              <div class="upload-track"><div class="upload-fill" id="uploadFill"></div></div>
-              <span class="upload-pct" id="uploadPct">0%</span>
+          <details class="style-lab" id="styleLab">
+            <summary>Style Lab <span class="opt-badge">optional</span></summary>
+            <div class="style-lab-grid">
+              <div class="panel">
+                <h3 class="eyebrow">Reference edit</h3>
+                <label class="field"><span>Reference video</span>
+                  <div class="select-wrap"><select id="styleVideoSelect"></select></div>
+                </label>
+                <p class="hint">A short edited clip whose look you want to copy. Upload it as a source, then pick it here.</p>
+              </div>
+              <div class="panel">
+                <h3 class="eyebrow">Extract frames</h3>
+                <label class="field"><span>Sampling</span>
+                  <div class="select-wrap"><select id="framesMode">
+                    <option value="uniform">Uniform (evenly spaced)</option>
+                    <option value="scene">Scene changes (cuts)</option>
+                  </select></div>
+                </label>
+                <label class="field"><span>Frames</span>
+                  <input type="number" id="framesNum" value="12" min="4" max="60" step="1"></label>
+                <label class="field"><span>Contact sheet</span>
+                  <div class="select-wrap"><select id="framesGrid">
+                    <option value="3x4">3 × 4</option>
+                    <option value="">None</option>
+                    <option value="4x4">4 × 4</option>
+                    <option value="3x3">3 × 3</option>
+                  </select></div>
+                </label>
+                <div class="btn-row">
+                  <button class="btn btn-primary" id="btnExtractFrames">Extract frames</button>
+                </div>
+                <p class="style-state" id="styleState">No frames yet.</p>
+              </div>
+              <div class="panel">
+                <h3 class="eyebrow">Analyze style</h3>
+                <div class="btn-row">
+                  <button class="btn btn-primary" id="btnAnalyzeStyle" disabled>Analyze → draft template</button>
+                </div>
+                <div id="styleReport" class="style-report"><p class="hint">Runs pixel analysis over the frames and drafts a template for this campaign.</p></div>
+              </div>
             </div>
-          </div>
-        </div>
-        <div class="cta-bar" id="ctaAnalyze" hidden>
-          <p class="cta-text">Video selected — let the AI find the highlights.</p>
-          <button class="btn btn-primary" id="btnCtaAnalyze">Analyze this video →</button>
-        </div>
-      </section>
-
-      <!-- ============ 2 · ANALYZE ============ -->
-      <section class="page" id="page-analyze" hidden>
-        <a class="crumb" id="crumbAnalyze" href="#/campaign">← Campaign</a>
-        <div class="page-head">
-          <h2><span class="stepno">2</span> Analyze</h2>
-          <p class="page-sub">Transcribe → typo fix → context → LLM highlight selection → b-roll cues. Rules come from this campaign’s brief.</p>
-        </div>
-        <div class="panel status-panel" id="analyzeStatus" hidden></div>
-        <div class="panel analyze-settings">
-          <h3 class="eyebrow">Run settings</h3>
-          <div class="analyze-fields">
-            <label class="field"><span>Min score</span>
-              <input type="number" id="minScore" step="0.05" min="0" max="1"></label>
-            <label class="field"><span>Max clips</span>
-              <input type="number" id="maxClips" step="1" min="1" max="30"></label>
-            <button class="btn btn-primary" id="btnAnalyze">Find highlights</button>
-          </div>
-          <p class="hint">Clips under 30s are dropped automatically. Selection uses the campaign brief.</p>
-        </div>
-        <div class="cta-bar" id="ctaReview" hidden>
-          <p class="cta-text" id="ctaReviewText">Candidates found — approve the ones you want.</p>
-          <button class="btn btn-primary" id="btnCtaReview">Review candidates →</button>
-        </div>
-      </section>
-
-      <!-- ============ 3 · REVIEW ============ -->
-      <section class="page" id="page-review" hidden>
-        <a class="crumb" id="crumbReview" href="#/campaign">← Campaign</a>
-        <div class="page-head">
-          <h2><span class="stepno">3</span> Review <span class="count" id="reviewCount"></span></h2>
-          <div class="page-actions">
-            <button class="btn btn-small btn-ghost" id="btnApproveAll">Approve all</button>
-            <button class="btn btn-small btn-primary" id="btnSaveReview">Save decisions</button>
-          </div>
-        </div>
-        <div class="review-bar panel">
-          <p class="hint" id="reviewHint">Decisions stay unsaved until you press Save.</p>
-        </div>
-        <div id="reviewList" class="cards"></div>
-        <div class="empty" id="reviewEmpty" hidden>No candidates yet — run Analyze first.</div>
-        <div class="cta-bar" id="ctaExport" hidden>
-          <p class="cta-text" id="ctaExportText">Ready — export the approved clips.</p>
-          <button class="btn btn-primary" id="btnCtaExport">Go to Export →</button>
-        </div>
-      </section>
-
-      <!-- ============ 4 · EXPORT ============ -->
-      <section class="page" id="page-export" hidden>
-        <a class="crumb" id="crumbExport" href="#/campaign">← Campaign</a>
-        <div class="page-head">
-          <h2><span class="stepno">4</span> Export</h2>
-          <p class="page-sub">Cut + render approved clips with the style, music and b-roll.</p>
-        </div>
-        <div class="panel status-panel" id="exportStatus" hidden></div>
-        <div class="grid-2">
-          <div class="panel">
-            <h3 class="eyebrow">Export settings</h3>
-            <label class="field"><span>Style</span>
-              <div class="select-wrap"><select id="templateSelect"></select></div>
-            </label>
-            <p class="template-desc" id="templateDesc"></p>
-            <div class="btn-row">
-              <button class="btn btn-primary" id="btnExport">Export approved clips</button>
-              <button class="btn btn-secondary" id="btnRunAll">Run everything (auto)</button>
+            <div class="section-head outputs-head">
+              <h3 class="eyebrow">Contact sheets</h3>
             </div>
-            <p class="hint">“Run everything” skips review and auto-approves everything above the min score.</p>
-          </div>
-          <div class="panel">
-            <h3 class="eyebrow">Sound &amp; b-roll</h3>
-            <label class="toggle-row">
-              <input type="checkbox" id="musicEnabled">
-              <span>Mix background music under the voice</span>
-            </label>
-            <label class="field"><span>Volume</span>
-              <input type="range" id="musicVolume" min="0" max="1" step="0.02"></label>
-            <label class="field-label">Track</label>
-            <div class="select-wrap music-track-wrap"><select id="musicTrack"></select></div>
-            <label class="upload upload-small" for="musicInput">
-              <span class="upload-icon">＋</span><span>Add a track</span>
-            </label>
-            <input type="file" id="musicInput" accept="audio/*" hidden>
-            <p class="field-label broll-lib-label">B-roll library</p>
-            <div class="broll-status" id="brollStatus"></div>
-          </div>
-        </div>
-        <div class="section-head outputs-head">
-          <h3 class="eyebrow">Exported clips <span class="count" id="outputCount"></span></h3>
-          <button class="link" id="btnOpenFolder">Open folder</button>
-        </div>
-        <div id="outputList" class="cards output-cards"></div>
-      </section>
+            <div id="styleSheets" class="cards"></div>
+          </details>
 
-      <!-- ============ STYLE LAB (side tool) ============ -->
-      <section class="page" id="page-style" hidden>
-        <a class="crumb" id="crumbStyle" href="#/campaign">← Campaign</a>
-        <div class="page-head">
-          <h2><span class="stepno">5</span> Style Lab <span class="opt-badge">optional</span></h2>
-          <p class="page-sub">Clone the look of an edit you like — reference clip in, reusable template for this campaign.</p>
-        </div>
-        <div class="style-lab-grid">
-          <div class="panel">
-            <h3 class="eyebrow">Step 1 · Reference edit</h3>
-            <label class="field"><span>Reference video</span>
-              <div class="select-wrap"><select id="styleVideoSelect"></select></div>
-            </label>
-            <p class="hint">A short edited clip whose look you want to copy — Shorts/Reels work best. Upload it like any other video, then pick it here.</p>
+          <div class="panel" id="styleExplorerPanel">
+            <h3 class="eyebrow">Style Explorer — style brief</h3>
+            <p class="hint">Optional free-text style direction (e.g. “no red, warm cinematic look, big bold captions”). It steers the variant generator and is passed to the vision-judge rubric for every preview.</p>
+            <textarea id="styleBrief" class="field" rows="3" placeholder="e.g. no red, warm cinematic look…"></textarea>
+            <p class="hint">Requires the vision model: <code>ollama pull qwen2.5vl:7b</code>. Exploring runs on the Exports page.</p>
+            <div class="settings-divider"></div>
+            <h3 class="eyebrow">Edit instructions</h3>
+            <p class="hint">Per-clip edit direction shown and confirmed before every generation run. Logged at export time and used as the style-explorer brief when no brief is set.</p>
+            <textarea id="editInstructions" class="field" rows="3" placeholder="e.g. keep captions small, hard cuts on emphasis words…"></textarea>
           </div>
-          <div class="panel">
-            <h3 class="eyebrow">Step 2 · Extract frames</h3>
-            <label class="field"><span>Sampling</span>
-              <div class="select-wrap"><select id="framesMode">
-                <option value="uniform">Uniform (evenly spaced)</option>
-                <option value="scene">Scene changes (cuts)</option>
-              </select></div>
-            </label>
-            <label class="field"><span>Frames</span>
-              <input type="number" id="framesNum" value="12" min="4" max="60" step="1"></label>
-            <label class="field"><span>Contact sheet</span>
-              <div class="select-wrap"><select id="framesGrid">
-                <option value="3x4">3 × 4</option>
-                <option value="">None</option>
-                <option value="4x4">4 × 4</option>
-                <option value="3x3">3 × 3</option>
-              </select></div>
-            </label>
-            <div class="btn-row">
-              <button class="btn btn-primary" id="btnExtractFrames">Extract frames</button>
-            </div>
-            <p class="style-state" id="styleState">No frames yet.</p>
-          </div>
-          <div class="panel">
-            <h3 class="eyebrow">Step 3 · Analyze style</h3>
-            <div class="btn-row">
-              <button class="btn btn-primary" id="btnAnalyzeStyle" disabled>Analyze → draft template</button>
-            </div>
-            <div id="styleReport" class="style-report"><p class="hint">Runs pixel analysis over the frames: layout, hook/caption colors, keyword emphasis, CTA. Drafts a template you can pick in Export.</p></div>
-          </div>
-        </div>
-        <div class="section-head outputs-head">
-          <h3 class="eyebrow">Contact sheets</h3>
-          <button class="link" id="btnCtaStyleExport" hidden>Use templates in Export →</button>
-        </div>
-        <div id="styleSheets" class="cards"></div>
-      </section>
-    </main>
+        </section>
+      </main>
+    </div>
 
     <footer class="runbar" id="runbar" hidden>
       <div class="runbar-left">
@@ -308,8 +315,40 @@
     <pre class="log-console" id="logConsole" hidden></pre>
   </div>
 
+  <div class="modal-backdrop" id="transcriptModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3>Transcript — <span id="transcriptVideoName"></span></h3>
+        <button class="link modal-close" id="transcriptClose">✕ Close</button>
+      </div>
+      <pre class="transcript-body" id="transcriptBody">Loading…</pre>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="exportConfigModal" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3>Before generating — <span id="exportConfigVideo"></span></h3>
+        <button class="link modal-close" id="exportConfigClose">✕ Close</button>
+      </div>
+      <div class="modal-body">
+        <label class="field"><span>Template (style for every approved clip)</span>
+          <div class="select-wrap"><select id="exportConfigTemplate"></select></div>
+        </label>
+        <label class="field"><span>Edit instructions (optional)</span>
+          <textarea id="exportConfigInstructions" class="field" rows="4" placeholder="e.g. keep captions small, hard cuts on emphasis words…"></textarea>
+        </label>
+        <p class="hint" id="exportConfigHint"></p>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="exportConfigCancel">Cancel</button>
+        <button class="btn btn-primary" id="exportConfigStart">Start export</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast" id="toast" hidden></div>
 
-  <script src="/static/app.js?v=11"></script>
+  <script src="/static/app.js?v=17"></script>
 </body>
 </html>

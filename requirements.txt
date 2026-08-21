@@ -10,3 +10,10 @@ python-multipart>=0.0.9
 # Campaign rules-doc extraction
 pypdf>=4.0
 python-docx>=1.1
+
+# Speaker-follow 9:16 / square crop
+mediapipe>=0.10.9
+opencv-python-headless>=4.8
+
+# Clip-boundary silence trim
+silero-vad>=5.1

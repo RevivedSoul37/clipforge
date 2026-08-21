@@ -106,6 +106,11 @@ def transcribe(video_path, model_size=None, device=None, compute_type=None,
         print("[transcribe] transcribing (word timestamps enabled)")
         segments, info = model.transcribe(str(audio_path), **transcribe_kwargs)
 
+        speech = []
+        if config.vad_enabled:
+            from src.audio_processor import detect_speech
+            speech = detect_speech(audio_path) or []
+
         result = {
             "video_id": video_path.stem,
             "source": str(video_path),
@@ -113,6 +118,7 @@ def transcribe(video_path, model_size=None, device=None, compute_type=None,
             "language": info.language,
             "language_probability": round(float(info.language_probability), 3),
             "model": model_size,
+            "speech": speech,
             "segments": [],
         }
         for seg in segments:

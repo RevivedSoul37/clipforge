@@ -1,13 +1,16 @@
 {
-  "name": "abu_ref1_style",
-  "description": "Auto-drafted from reference 'abu_ref1' (3 frames). Review and tune.",
+  "name": "full_screen",
+  "golden": true,
+  "label": "Full screen",
+  "description": "9:16 fully covered by the video — no bars. Speaker-follow crop when face tracking is available, else center crop. Hook sits in the top safe zone, captions in the bottom safe zone, both kept away from the face and platform UI chrome.",
   "output": {
     "aspect_ratio": "9:16",
     "resolution": "1080x1920"
   },
   "crop": {
-    "mode": "letterbox",
-    "background": "#000000"
+    "mode": "fill",
+    "background": "#000000",
+    "follow_speaker": true
   },
   "effects": {
     "grade": "none",
@@ -16,28 +19,32 @@
   "hook": {
     "enabled": true,
     "font": "Bebas Neue",
-    "size": 110,
-    "color": "#FBFDF8",
+    "size": 84,
+    "color": "#FFFFFF",
     "position": "top",
-    "margin_v": 180
+    "margin_v": 160
   },
   "captions": {
     "enabled": true,
     "font": "Poppins-Bold",
-    "size": 76,
-    "color": "#FDFCEC",
+    "size": 72,
+    "color": "#FFFFFF",
     "outline_color": "#000000",
     "outline_width": 4,
     "position": "bottom_center",
     "margin_v": 340,
     "max_words": 4,
+    "gradient": {
+      "enabled": false
+    },
     "highlight_keyword": {
       "enabled": true,
-      "color": "#FC0100"
+      "color": "#F7E94A"
     }
   },
   "music": {
     "enabled": true,
+    "track": "",
     "volume": 0.12
   },
   "broll": {
@@ -53,14 +60,5 @@
   },
   "watermark": {
     "enabled": false
-  },
-  "cta": {
-    "enabled": true,
-    "text": "Follow for more!",
-    "font": "Poppins-Bold",
-    "size": 48,
-    "color": "#FC0100",
-    "position": "bottom",
-    "margin_v": 120
   }
 }

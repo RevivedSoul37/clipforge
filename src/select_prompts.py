@@ -67,20 +67,9 @@ Reject: channel intros/outros, housekeeping ("like and subscribe"), mid-thought 
 - Score is honest, not a formality: most clips score 0.5-0.8. Reserve 0.9+ for moments that would genuinely stop a scroller.
 </scoring_rules>
 
-<broll_placement>
-For 1-3 emotional beats per clip, tag a b-roll cue. B-roll will ALWAYS show OTHER people (stock footage), never the host, and never literal actions from the dialogue (do NOT show a gym because he says "gym"). Tag the EMOTIONAL subtext from exactly these emotions:
-- struggle (depressed, stressed, overwhelmed, needing help)
-- joy (laughing, celebrating, relief)
-- wealth (earning, success, counting money)
-- health (energetic, exercising, eating well)
-- focus (deep work, determination)
-- community (family, friends, support)
-Each cue is 2-8 seconds, inside the clip's time range, using absolute seconds from video start.
-</broll_placement>
-
 <output_contract>
 Respond with JSON only — no markdown fences, no commentary, no text outside the JSON, in this exact shape:
-{"clips": [{"start_segment": <int>, "end_segment": <int>, "reason": "<short tag + why>", "score": <0.0 to 1.0>, "hook": "<one punchy on-screen title, max 8 words, correctly spelled>", "broll": [{"start": <seconds>, "end": <seconds>, "emotion": "<one of the list>", "note": "<why this emotion fits>"}]}]}
+{"clips": [{"start_segment": <int>, "end_segment": <int>, "reason": "<short tag + why>", "score": <0.0 to 1.0>, "hook": "<one punchy on-screen title, max 8 words, correctly spelled>"}]}
 </output_contract>"""
 
 SELECT_RETRY_PROMPT = (

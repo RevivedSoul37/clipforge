@@ -27,3 +27,13 @@ def emit(percent, stage, message=""):
         "message": str(message),
     }, ensure_ascii=False)
     print(f"@@PROGRESS@@ {payload}", flush=True)
+
+
+def event(kind, data=None):
+    """Emit a discrete UI event (notification-worthy) without moving the
+    progress bar. Only emitted when progress is enabled."""
+    if not _enabled:
+        return
+    payload = json.dumps({"kind": str(kind), "data": data or {}},
+                         ensure_ascii=False)
+    print(f"@@EVENT@@ {payload}", flush=True)

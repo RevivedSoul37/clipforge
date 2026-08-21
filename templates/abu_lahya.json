@@ -1,13 +1,20 @@
 {
   "name": "abu_lahya",
-  "description": "Abu Lahya house style: letterbox native-aspect band on black, cream Bebas hook at video top, white Poppins captions with pure-red keyword emphasis, static red CTA above band bottom.",
+  "golden": true,
+  "label": "Letterbox",
+  "description": "Letterbox native-aspect band on black. Cream hook at video top, white captions with red keyword hits — all-platform 9:16 safe zone.",
   "output": {
     "aspect_ratio": "9:16",
     "resolution": "1080x1920"
   },
   "crop": {
     "mode": "letterbox",
-    "background": "#000000"
+    "background": "#000000",
+    "follow_speaker": false
+  },
+  "effects": {
+    "grade": "none",
+    "vignette": 0.0
   },
   "hook": {
     "enabled": true,
@@ -50,7 +57,9 @@
     "volume": 0.12
   },
   "broll": {
-    "enabled": false
+    "enabled": false,
+    "mode": "cutaway",
+    "pip_scale": 0.6
   },
   "intro": {
     "enabled": false

@@ -62,6 +62,8 @@ class Config:
         self.candidates_dir = self._resolve(paths.get("clip_candidates", "data/clip_candidates"))
         self.frames_dir = self._resolve(paths.get("frames", "data/frames"))
         self.campaigns_dir = self._resolve(paths.get("campaigns", "data/campaigns"))
+        self.previews_dir = self._resolve(paths.get("previews", "data/previews"))
+        self.explorations_dir = self._resolve(paths.get("explorations", "data/style_explorations"))
         self.active_campaign_id = None
 
         t = _deep_get(self.data, "transcription", {}) or {}
@@ -74,6 +76,12 @@ class Config:
         self.whisper_initial_prompt = t.get("initial_prompt") or None
         self.whisper_condition_on_previous = bool(t.get("condition_on_previous_text", False))
         self.whisper_low_confidence = float(t.get("low_confidence_threshold", 0.55))
+        vad = t.get("vad") if isinstance(t.get("vad"), dict) else {}
+        self.vad_enabled = bool(vad.get("enabled", True))
+        self.vad_threshold = float(vad.get("threshold", 0.5))
+        self.vad_pad_in = float(vad.get("pad_in", 0.12))
+        self.vad_pad_out = float(vad.get("pad_out", 0.18))
+        self.vad_min_len = float(vad.get("min_len", 12.0))
 
         llm = _deep_get(self.data, "llm", {}) or {}
         self.llm_provider = llm.get("provider", "ollama")
@@ -95,6 +103,26 @@ class Config:
         self.broll_pexels_key = self.env.get("PEXELS_API_KEY", "")
         self.broll_pixabay_key = self.env.get("PIXABAY_API_KEY", "")
 
+        self.smtp_host = self.env.get("SMTP_HOST", "smtp.gmail.com")
+        self.smtp_port = int(self.env.get("SMTP_PORT") or 587)
+        self.smtp_user = self.env.get("SMTP_USER", "")
+        self.smtp_pass = self.env.get("SMTP_PASS", "")
+        self.transcript_recipient = self.env.get(
+            "TRANSCRIPT_RECIPIENT_EMAIL", "r73608925@gmail.com")
+        self.transcript_forward = self.env.get(
+            "TRANSCRIPT_FORWARD_EMAIL", "syedmunavarahmed444@gmail.com")
+
+        # Highlight selection source: "email" (transcript emailed out; the AI
+        # reply is ingested by src/email_highlights.py) or "local" (Ollama).
+        # Campaigns can override this per-campaign via settings.local_highlights.
+        self.highlight_source = (self.env.get("HIGHLIGHT_SOURCE") or "email").strip().lower()
+        self.local_highlights = self.highlight_source != "email"
+        self.highlight_reply_sender = self.env.get(
+            "HIGHLIGHT_REPLY_SENDER", "syedmunavarahmed444@gmail.com")
+        self.imap_host = self.env.get("IMAP_HOST", "imap.gmail.com")
+        self.imap_port = int(self.env.get("IMAP_PORT") or 993)
+        self.imap_folder = self.env.get("IMAP_FOLDER", "INBOX")
+
         ctx = _deep_get(self.data, "context", {}) or {}
         self.target_platform = ctx.get("target_platform", "youtube_shorts")
 
@@ -110,6 +138,20 @@ class Config:
         self.preset = enc.get("preset", "veryfast")
 
         self.default_template = self.data.get("default_template", "square_captioned")
+
+        vis = _deep_get(self.data, "vision", {}) or {}
+        self.vision_enabled = bool(vis.get("enabled", True))
+        self.vision_model = self.env.get("VISION_MODEL") or vis.get("model", "qwen2.5vl:7b")
+        self.vision_base_url = (self.env.get("VISION_BASE_URL")
+                                or vis.get("base_url") or self.llm_base_url)
+        self.vision_frames_per_variant = int(vis.get("frames_per_variant", 2))
+        self.vision_temperature = float(vis.get("temperature", 0.1))
+
+        exp = _deep_get(self.data, "explore", {}) or {}
+        self.explore_max_variants = int(exp.get("max_variants", 10))
+        self.explore_preview_resolution = exp.get("preview_resolution", "540x960")
+        self.explore_preview_crf = int(exp.get("preview_crf", 28))
+        self.explore_preview_preset = exp.get("preview_preset", "ultrafast")
 
     def _resolve(self, value: str) -> Path:
         p = Path(value)
@@ -148,7 +190,12 @@ class Config:
         self.context_dir = camp.context_dir
         self.candidates_dir = camp.candidates_dir
         self.frames_dir = camp.frames_dir
+        self.previews_dir = camp.previews_dir
+        self.explorations_dir = camp.explorations_dir
         self.rules_file = camp.rules_summary_path
+        settings = camp.settings()
+        if settings.get("default_template"):
+            self.default_template = settings["default_template"]
         if camp.has_template():
             self.default_template = str(camp.template_path)
         return camp
@@ -156,7 +203,8 @@ class Config:
     def ensure_dirs(self):
         for d in (self.input_dir, self.output_dir, self.raw_dir, self.music_dir,
                   self.broll_dir, self.transcripts_dir, self.context_dir,
-                  self.candidates_dir, self.frames_dir, self.campaigns_dir):
+                  self.candidates_dir, self.frames_dir, self.campaigns_dir,
+                  self.previews_dir, self.explorations_dir):
             d.mkdir(parents=True, exist_ok=True)
 
 

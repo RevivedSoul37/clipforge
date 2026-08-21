@@ -15,6 +15,7 @@ three mechanics instead of hoping the model guesses right:
 Output: data/clip_candidates/<video_id>_candidates.json
 """
 import json
+import re
 from pathlib import Path
 
 from src.config import config
@@ -285,27 +286,6 @@ def _resolve_clip(c, segments_by_id, all_segments, duration):
     return start, end, s_id, e_id
 
 
-def _clean_broll(broll_raw, start, end):
-    broll = []
-    for b in (broll_raw or [])[:4]:
-        if not isinstance(b, dict):
-            continue
-        try:
-            b_start = max(start, min(float(b.get("start", start)), end))
-            b_end = min(end, max(float(b.get("end", end)), b_start + 1.0))
-        except (TypeError, ValueError):
-            continue
-        if b_end <= b_start:
-            continue
-        broll.append({
-            "start": round(b_start, 3),
-            "end": round(b_end, 3),
-            "emotion": str(b.get("emotion", "")).strip().lower(),
-            "note": str(b.get("note", "") or "").strip(),
-        })
-    return broll
-
-
 def _merge_candidates(cands):
     """Dedupe overlapping candidates (chunk overlaps re-score the same text):
     keep the higher-scoring clip, extend it to cover the overlapping span."""
@@ -331,7 +311,6 @@ def _merge_candidates(cands):
             hit["score"] = c["score"]
             hit["reason"] = c["reason"]
             hit["hook"] = c["hook"]
-            hit["broll"] = c["broll"]
     for k in kept:
         if k["end"] - k["start"] > MAX_CLIP_LEN:
             k["end"] = k["start"] + MAX_CLIP_LEN
@@ -361,13 +340,30 @@ def _finalize(clips_raw, segments, duration, min_score, max_clips):
             "reason": str(c.get("reason", "")).strip(),
             "score": round(score, 3),
             "hook": str(c.get("hook", "") or "").strip(),
-            "broll": _clean_broll(c.get("broll"), start, end),
             "status": "pending",
         })
 
     cleaned = _merge_candidates(cleaned)
     cleaned.sort(key=lambda c: c["score"], reverse=True)
     return cleaned[:max_clips]
+
+
+def _tighten(clips, segments, speech):
+    """Snap clip edges to speech so Review/export start on talking, not air."""
+    if not config.vad_enabled or not clips:
+        return clips
+    from src.audio_processor import spans_from_words, trim_clip
+    spans = speech or spans_from_words(segments)
+    if not spans:
+        return clips
+    out = []
+    for clip in clips:
+        tight = trim_clip(clip, spans)
+        if tight["start"] != clip["start"] or tight["end"] != clip["end"]:
+            print(f"[vad] clip {clip['start']:.2f}-{clip['end']:.2f}s "
+                  f"-> {tight['start']:.2f}-{tight['end']:.2f}s")
+        out.append(tight)
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -436,6 +432,7 @@ def select_highlights(video_path, transcript_path=None, context_path=None,
             progress((i + 1) / total_chunks)
 
     clips = _finalize(all_clips, segments, duration, min_score, max_clips)
+    clips = _tighten(clips, segments, transcript.get("speech"))
 
     result = {
         "video_id": video_path.stem,

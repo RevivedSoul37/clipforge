@@ -30,10 +30,13 @@ for _stream in ("stdout", "stderr"):
 from src.config import config, ROOT
 from src import transcribe, build_context, select_highlights, cut_clips, apply_template
 from src import clean_transcript
-from src import fetch_broll
+from src.email_transcript import email_best_transcript
+from src import email_highlights
+
 from src import extract_frames, analyze_frames
 from src import progress
 from src import campaigns as camp_mod
+from src import style_explorer
 
 VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")
 
@@ -84,6 +87,7 @@ def _sync_exported(video, clips=None):
     if not camp:
         return
     camp_mod.mark_clips_exported(camp, video.stem, clips)
+    camp.touch()
 
 
 def _transcript_path(video):
@@ -123,14 +127,78 @@ def _scaled(start, end, stage):
     return cb
 
 
+def _use_local_highlights(args, camp):
+    """True = run the local Ollama select stage; False = email the transcript
+    and ingest highlights from the AI reply (src/email_highlights.py)."""
+    if getattr(args, "no_local_highlights", False):
+        return False
+    if camp is not None:
+        return bool(camp.settings().get("local_highlights", True))
+    return config.local_highlights
+
+
+def _email_gate(video, camp):
+    """Email mode: write an empty candidates placeholder so review/approval
+    shows a waiting state instead of crashing. The server's inbox poller (or
+    `check-email`) fills it in when the highlight reply arrives."""
+    settings = camp.settings() if camp else {}
+    min_score = settings.get("min_score", config.llm_min_score)
+    path = _candidates_path(video)
+    transcript_path = _transcript_path(video)
+    duration = 0.0
+    try:
+        duration = float(json.loads(
+            transcript_path.read_text(encoding="utf-8")).get("duration", 0))
+    except Exception:  # noqa: BLE001
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "video_id": video.stem,
+        "source": str(video),
+        "duration": duration,
+        "model": "email",
+        "highlights_from": "pending",
+        "min_score": min_score,
+        "clips": [],
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _email_await(video, camp, message=""):
+    """Send the transcript email (best effort), write the awaiting placeholder
+    and tell the UI. The run finishes immediately; the reply is picked up by
+    the web server's background inbox poller."""
+    sent = False
+    try:
+        sent = email_best_transcript(video,
+                                     recipients_dir=config.candidates_dir)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[email] skipped: {exc}")
+    _email_gate(video, camp)
+    _sync_reviewing(video)
+    progress.emit(100, "awaiting", message or
+                  ("Transcript emailed — waiting for the highlight reply"
+                   if sent else "Transcript email failed — check email settings"))
+    progress.event("awaiting_highlights", {
+        "video_id": video.stem,
+        "sent": bool(sent),
+    })
+    return sent
+
+
 def cmd_transcribe(args):
     if args.emit_progress:
         progress.enable()
     progress.emit(0, "transcribe", "Loading model and extracting audio")
-    transcribe.transcribe(_resolve_video(args.video), model_size=args.model,
+    video = _resolve_video(args.video)
+    transcribe.transcribe(video, model_size=args.model,
                           device=args.device, compute_type=args.compute,
                           language=args.language,
                           progress=_scaled(0, 100, "transcribe"))
+    try:
+        email_best_transcript(video, recipients_dir=config.candidates_dir)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[email] skipped: {exc}")
     progress.emit(100, "done", "Transcript saved")
 
 
@@ -138,8 +206,12 @@ def cmd_clean(args):
     if args.emit_progress:
         progress.enable()
     progress.emit(0, "clean", "Fixing low-confidence words")
-    clean_transcript.clean_transcript(_resolve_video(args.video),
-                                      transcript_path=args.transcript)
+    video = _resolve_video(args.video)
+    clean_transcript.clean_transcript(video, transcript_path=args.transcript)
+    try:
+        email_best_transcript(video, recipients_dir=config.candidates_dir)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[email] skipped: {exc}")
     progress.emit(100, "done", "Transcript cleaned")
 
 
@@ -160,6 +232,9 @@ def cmd_select(args):
     if camp:
         rules = camp.rules_summary() if camp else None
         camp_mod.add_analyzing_placeholder(camp, video.stem)
+    if getattr(args, "email", False) or not _use_local_highlights(args, camp):
+        _email_await(video, camp)
+        return
     select_highlights.select_highlights(video,
                                         transcript_path=args.transcript,
                                         context_path=args.context,
@@ -189,15 +264,6 @@ def cmd_cut(args):
     progress.emit(100, "done", "Cutting finished")
 
 
-def _broll_for(manifest, index):
-    if not manifest:
-        return None
-    for entry in manifest.get("clips", []):
-        if entry.get("clip_index") == index:
-            return entry.get("cues")
-    return None
-
-
 def cmd_render(args):
     if args.emit_progress:
         progress.enable()
@@ -208,7 +274,6 @@ def cmd_render(args):
     template_name = args.template or config.default_template
     manifest = cut_clips.read_manifest(config.raw_dir, video.stem)
     manifest_clips = {Path(c["path"]).name: c for c in manifest["clips"]} if manifest else {}
-    broll_manifest = fetch_broll.read_manifest(video.stem)
     total = max(1, len(clips))
     for i, clip in enumerate(clips, start=1):
         raw = config.raw_dir / f"{video.stem}_clip_{i:02d}.mp4"
@@ -222,15 +287,17 @@ def cmd_render(args):
         progress.emit(100 * (i - 1) / total, "render", f"Rendering clip {i}/{total}")
         out = apply_template.apply_template(raw, transcript_path, start, end,
                                             template_name=template_name,
-                                            hook_text=clip.get("hook") or None,
-                                            broll_cues=_broll_for(broll_manifest, i))
+                                            hook_text=clip.get("hook") or None)
         print(f"[render] -> {out}")
         progress.emit(100 * i / total, "render", f"Rendered clip {i}/{total}")
     progress.emit(100, "done", f"Rendered {total} clips")
 
 
 def _prepare(video, args, t0, t1):
-    """Run transcribe → clean → context → select → broll; returns candidates path."""
+    """Run transcribe → clean → context → select; returns the candidates path.
+
+    Returns None for email mode after the transcript has been emailed — the
+    run finishes and the highlight reply arrives via the inbox poller."""
     camp = _active_campaign()
     if camp:
         camp_mod.add_analyzing_placeholder(camp, video.stem)
@@ -241,38 +308,25 @@ def _prepare(video, args, t0, t1):
         clean_transcript.clean_transcript(video)
     progress.emit(t0 + (t1 - t0) * 0.5, "context", "Building video context")
     build_context.build_context(video)
-    progress.emit(t0 + (t1 - t0) * 0.55, "select", "Finding highlights with the LLM")
     camp = _active_campaign()
-    rules = camp.rules_summary() if camp else None
-    select_highlights.select_highlights(video, max_clips=args.max_clips,
-                                        min_score=args.min_score,
-                                        rules_summary=rules,
-                                        progress=_scaled(t0 + (t1 - t0) * 0.55,
-                                                         t0 + (t1 - t0) * 0.9, "select"))
-    _sync_reviewing(video)
-    progress.emit(t0 + (t1 - t0) * 0.92, "broll", "Resolving b-roll library")
-    data, clips = cut_clips.load_candidates(_candidates_path(video))
-    fetch_broll.build_manifest(video.stem, clips)
+    if _use_local_highlights(args, camp):
+        progress.emit(t0 + (t1 - t0) * 0.55, "select", "Finding highlights with the LLM")
+        camp = _active_campaign()
+        rules = camp.rules_summary() if camp else None
+        select_highlights.select_highlights(video, max_clips=args.max_clips,
+                                            min_score=args.min_score,
+                                            rules_summary=rules,
+                                            progress=_scaled(t0 + (t1 - t0) * 0.55,
+                                                             t0 + (t1 - t0) * 0.9, "select"))
+        _sync_reviewing(video)
+    else:
+        progress.emit(t0 + (t1 - t0) * 0.55, "select", "Emailing the transcript")
+        _email_await(video, camp)
+        return None
+    camp = _active_campaign()
+    if camp:
+        camp.touch()
     return _candidates_path(video)
-
-
-def cmd_broll(args):
-    if args.emit_progress:
-        progress.enable()
-    config.ensure_dirs()
-    if args.fetch:
-        progress.emit(0, "broll", "Fetching stock b-roll")
-        report = fetch_broll.fetch_missing(progress=_scaled(0, 50, "broll"))
-        print(f"[broll] fetched: {report}")
-    video = _resolve_video(args.video)
-    candidates_path = Path(args.candidates) if args.candidates else _candidates_path(video)
-    if not candidates_path.exists():
-        raise FileNotFoundError(f"Candidates not found: {candidates_path}. Run analyze first.")
-    _, clips = cut_clips.load_candidates(candidates_path)
-    progress.emit(60, "broll", "Resolving b-roll cues")
-    fetch_broll.build_manifest(video.stem, clips)
-    progress.emit(100, "done", "B-roll manifest ready")
-
 
 
 def cmd_frames(args):
@@ -324,6 +378,170 @@ def cmd_style(args):
           f"cta={report['cta']['median_hex']}")
     progress.emit(100, "done", "Style template drafted")
 
+
+def _campaign_style_brief():
+    camp = _active_campaign()
+    if not camp:
+        return ""
+    return str(camp.settings().get("style_brief") or "").strip()
+
+
+def _campaign_edit_instructions():
+    camp = _active_campaign()
+    if not camp:
+        return ""
+    return str(camp.settings().get("edit_instructions") or "").strip()
+
+
+def _template_for(video, explicit=None):
+    """Explicit flag wins; else a style-explorer winner for this stem; else
+    the campaign/global default template."""
+    if explicit:
+        return explicit
+    winner = style_explorer.winner_template_path(video.stem)
+    if winner.exists():
+        print(f"[export] using exploration winner template: {winner.name}")
+        return str(winner)
+    return config.default_template
+
+
+def cmd_explore_style(args):
+    """Explore edit styles on one probe clip, auto-pick the winning style
+    with the local vision LLM, and persist it for full-quality rollout."""
+    if args.emit_progress:
+        progress.enable()
+    config.ensure_dirs()
+    video = _resolve_video(args.video)
+
+    err = style_explorer.check_vision_ready()
+    if err:
+        raise SystemExit(f"[explore] {err}")
+
+    candidates_path = _candidates_path(video)
+    data, clips = _approved(candidates_path, auto=args.auto)
+    if not clips:
+        raise SystemExit("[explore] no approved clips. Approve clips in "
+                         "review first, or use --auto.")
+    if args.probe is not None:
+        probe = next((c for c in clips if c.get("index") == args.probe), None)
+        if probe is None and 0 < args.probe <= len(clips):
+            probe = clips[args.probe - 1]
+        if probe is None:
+            raise SystemExit(f"[explore] probe clip #{args.probe} not found")
+    else:
+        probe = max(clips, key=lambda c: float(c.get("score") or 0.0))
+    print(f"[explore] probe clip: {probe.get('start', 0):.2f}-"
+          f"{probe.get('end', 0):.2f}s (score {probe.get('score')})")
+
+    brief = (args.brief or "").strip() or _campaign_style_brief()
+    transcript_path = _transcript_path(video)
+    preview_dir = config.previews_dir / video.stem
+
+    progress.emit(0, "explore-cut", "Cutting probe edge variants")
+    edges = style_explorer.cut_probe_variants(
+        video, probe, transcript_path, preview_dir)
+    progress.emit(15, "explore-cut", f"{len(edges)} probe edge cut(s)")
+
+    constraints = style_explorer.interpret_brief(brief)
+    progress.emit(18, "explore-variants", "Generating style variants")
+    variants = style_explorer.generate_variants(
+        video.stem, max_variants=args.variants, constraints=constraints)
+    print(f"[explore] {len(variants)} variant(s) generated")
+    progress.emit(25, "explore-variants", f"{len(variants)} variants")
+
+    probes = {
+        "default": edges[0],
+        "tight": edges[1] if len(edges) > 1 else edges[0],
+        "extended_lead": edges[-1],
+    }
+    hook_text = probe.get("hook") or None
+    n_variants = len(variants)
+    preview_files = {}
+    for i, (name, tpl, summary) in enumerate(variants):
+        edge_key = ("extended_lead" if i == 0 else
+                    "tight" if i == n_variants - 1 else "default")
+        pr = probes[edge_key]
+        progress.emit(25 + 55 * i / max(1, n_variants), "explore-render",
+                      f"Rendering preview {i + 1}/{n_variants}: {name}")
+        try:
+            out = style_explorer.render_variant(
+                i, tpl, {"path": pr["path"], "transcript": transcript_path,
+                         "start": pr["start"], "end": pr["end"]},
+                preview_dir, hook_text)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[explore] render failed for {name}: {exc}")
+            continue
+        preview_files[i] = out
+
+    progress.emit(80, "explore-judge", "Scoring previews with the vision LLM")
+    scored_records = []
+    for i, (name, tpl, summary) in enumerate(variants):
+        pv = preview_files.get(i)
+        if pv is None:
+            continue
+        frames = style_explorer.extract_frames(pv, preview_dir, prefix=f"v{i:02d}")
+        verdict = style_explorer.judge_variant(frames, summary, brief)
+        progress.emit(80 + 20 * (i + 1) / max(1, n_variants),
+                      "explore-judge", f"Judged {i + 1}/{n_variants}")
+        if verdict is None:
+            print(f"[explore] {name}: unscorable, excluded")
+            continue
+        scored_records.append({
+            "name": name,
+            "file": pv.name,
+            "edge": ("extended_lead" if i == 0 else
+                     "tight" if i == n_variants - 1 else "default"),
+            "summary": summary,
+            "frames": [p.name for p in frames],
+            "scores": verdict.get("scores", {}),
+            "total": verdict.get("total"),
+            "verdict": verdict.get("verdict", ""),
+            "template": tpl,
+        })
+
+    winner = None
+    if scored_records:
+        winner = max(scored_records, key=lambda r: float(r["total"]))
+
+    import datetime as _dt
+    report = {
+        "video_id": video.stem,
+        "video": str(video),
+        "brief": brief,
+        "brief_constraints": constraints,
+        "probe": {
+            "start": probe.get("start"), "end": probe.get("end"),
+            "score": probe.get("score"), "hook": hook_text,
+        },
+        "vision_model": config.vision_model,
+        "variants": [{k: v for k, v in r.items() if k != "template"}
+                     for r in scored_records],
+        "winner": winner["name"] if winner else None,
+        "timestamp": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+    }
+    style_explorer.save_report(report)
+
+    if winner is None:
+        print("[explore] WARNING: no variant scored; falling back to the "
+              f"default template '{config.default_template}'")
+        progress.emit(100, "done", "Exploration finished (no winner scored)")
+        return
+
+    winner_path = style_explorer.winner_template_path(video.stem)
+    winner_tpl = winner["template"]
+    winner_tpl["name"] = f"{video.stem}_winner"
+    winner_path.write_text(json.dumps(winner_tpl, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+    style_explorer.save_report(dict(report, winner_template=winner_path.name))
+
+    print(f"[explore] {len(scored_records)}/{n_variants} previews scored, "
+          f"winner: {winner['name']} (total {float(winner['total']):.1f})")
+    print(f"[explore] verdict: {winner['verdict']}")
+    print(f"[explore] winner template -> {winner_path}")
+    progress.emit(100, "done",
+                  f"Winner: {winner['name']} ({float(winner['total']):.1f})")
+
+
 def cmd_analyze(args):
     """transcribe â†’ context â†’ select. Produces candidates for review."""
     if args.emit_progress:
@@ -340,6 +558,11 @@ def cmd_export(args):
         progress.enable()
     config.ensure_dirs()
     video = _resolve_video(args.video)
+    instructions = (getattr(args, "instructions", "") or "").strip()
+    if not instructions:
+        instructions = _campaign_edit_instructions()
+    if instructions:
+        print(f"[export] edit instructions: {instructions}")
     candidates_path = _candidates_path(video)
     data, clips = _approved(candidates_path, auto=args.auto)
     if not clips:
@@ -348,17 +571,14 @@ def cmd_export(args):
     progress.emit(0, "cut", f"Cutting {len(clips)} clips")
     results = cut_clips.cut_clips(video, clips, progress=_scaled(0, 45, "cut"))
 
-    template_name = args.template or config.default_template
+    template_name = _template_for(video, args.template)
     transcript_path = _transcript_path(video)
-    duration = data.get("duration")
-    broll_manifest = fetch_broll.read_manifest(video.stem)
     total = max(1, len(results))
     for i, r in enumerate(results):
         progress.emit(45 + 55 * i / total, "render", f"Rendering clip {i + 1}/{total}")
         out = apply_template.apply_template(r["path"], transcript_path, r["start"], r["end"],
                                             template_name=template_name,
-                                            hook_text=clips[i].get("hook") or None,
-                                            broll_cues=_broll_for(broll_manifest, i + 1))
+                                            hook_text=clips[i].get("hook") or None)
         print(f"[export] -> {out}")
     _sync_exported(video, clips)
     progress.emit(100, "done", f"Exported {len(results)} clips")
@@ -371,6 +591,10 @@ def cmd_pipeline(args):
     config.ensure_dirs()
     video = _resolve_video(args.video)
     candidates_path = _prepare(video, args, 0, 55)
+    if candidates_path is None:
+        print("[pipeline] email mode: waiting for the highlight reply; "
+              "approve the clips in the Approval page when they arrive.")
+        return
 
     _, clips = _approved(candidates_path, auto=True)
     if not clips:
@@ -379,16 +603,14 @@ def cmd_pipeline(args):
     progress.emit(55, "cut", f"Cutting {len(clips)} clips")
     results = cut_clips.cut_clips(video, clips, progress=_scaled(55, 75, "cut"))
 
-    template_name = args.template or config.default_template
+    template_name = _template_for(video, args.template)
     transcript_path = _transcript_path(video)
-    broll_manifest = fetch_broll.read_manifest(video.stem)
     total = max(1, len(results))
     for i, r in enumerate(results):
         progress.emit(75 + 25 * i / total, "render", f"Rendering clip {i + 1}/{total}")
         out = apply_template.apply_template(r["path"], transcript_path, r["start"], r["end"],
                                             template_name=template_name,
-                                            hook_text=clips[i].get("hook") or None,
-                                            broll_cues=_broll_for(broll_manifest, i + 1))
+                                            hook_text=clips[i].get("hook") or None)
         print(f"[pipeline] final -> {out}")
 
     _sync_exported(video, clips)
@@ -399,27 +621,41 @@ def cmd_pipeline(args):
 def cmd_batch(args):
     config.ensure_dirs()
     videos = sorted([p for p in config.input_dir.iterdir()
-                     if p.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm", ".avi")])
+                      if p.suffix.lower() in (".mp4", ".mov", ".mkv", ".webm", ".avi")])
     if not videos:
         raise SystemExit(f"No videos found in {config.input_dir}")
     for video in videos:
         print(f"\n=== processing {video.name} ===")
         candidates_path = _prepare(video, args, 0, 55)
+        if candidates_path is None:
+            print("[batch] email mode: waiting for the highlight reply; skipping clips")
+            continue
         _, clips = _approved(candidates_path, auto=True)
         if not clips:
             print("[batch] no clips above threshold; skipping")
             continue
         results = cut_clips.cut_clips(video, clips)
-        template_name = args.template or config.default_template
+        template_name = _template_for(video, args.template)
         transcript_path = _transcript_path(video)
-        broll_manifest = fetch_broll.read_manifest(video.stem)
         for i, r in enumerate(results):
             out = apply_template.apply_template(r["path"], transcript_path,
                                                 r["start"], r["end"],
                                                 template_name=template_name,
-                                                hook_text=clips[i].get("hook") or None,
-                                                broll_cues=_broll_for(broll_manifest, i + 1))
+                                                hook_text=clips[i].get("hook") or None)
             print(f"[batch] final -> {out}")
+
+
+def cmd_email_check(args):
+    if args.emit_progress:
+        progress.enable()
+    summaries = email_highlights.poll_highlight_emails(
+        on_ingested=lambda s: progress.event("highlights_received", s))
+    print(f"[email] inbox check complete: {len(summaries)} highlight message(s) ingested")
+    for s in summaries:
+        print(f"[email]   {s.get('video_id')}: {s.get('clip_count')} clip(s)")
+    if not summaries:
+        print("[email] no new highlight replies (they must come from "
+              f"{config.highlight_reply_sender or 'the configured sender'})")
 
 
 def main():
@@ -447,6 +683,8 @@ def main():
     p = sub.add_parser("select", help="LLM highlight selection (Phase 2)")
     p.add_argument("video"); p.add_argument("--transcript"); p.add_argument("--context")
     p.add_argument("--max-clips", type=int); p.add_argument("--min-score", type=float)
+    p.add_argument("--email", action="store_true",
+                   help="email mode: send transcript, wait for the AI highlight reply")
     p.set_defaults(func=cmd_select)
 
     p = sub.add_parser("review", help="Launch Streamlit review UI (legacy)")
@@ -477,17 +715,25 @@ def main():
     p.add_argument("--cta-text", dest="cta_text", default="Follow for more!")
     p.set_defaults(func=cmd_style)
 
+    p = sub.add_parser("explore-style",
+                       help="Explore edit styles on a probe clip (vision-LLM auto-select)")
+    p.add_argument("video")
+    p.add_argument("--brief", help="style brief text (overrides campaign brief)")
+    p.add_argument("--variants", type=int, help="number of variants (default from config)")
+    p.add_argument("--probe", type=int, help="probe clip index (default: highest score)")
+    p.add_argument("--auto", action="store_true",
+                   help="use score-threshold candidates, not just approved")
+    p.set_defaults(func=cmd_explore_style)
+
     p = sub.add_parser("analyze", help="transcribe -> context -> select (for review)")
     p.add_argument("video"); p.add_argument("--max-clips", type=int); p.add_argument("--min-score", type=float)
+    p.add_argument("--no-local-highlights", action="store_true",
+                   help="skip local Ollama select; wait for AI highlights by email")
     p.set_defaults(func=cmd_analyze)
-
-    p = sub.add_parser("broll", help="resolve/fetch b-roll for a video's candidates")
-    p.add_argument("video"); p.add_argument("--candidates")
-    p.add_argument("--fetch", action="store_true", help="download missing stock first")
-    p.set_defaults(func=cmd_broll)
 
     p = sub.add_parser("export", help="cut + render approved clips")
     p.add_argument("video"); p.add_argument("--template"); p.add_argument("--auto", action="store_true")
+    p.add_argument("--instructions", help="edit instructions to log with this export")
     p.set_defaults(func=cmd_export)
 
     p = sub.add_parser("pipeline", help="Full auto pipeline (Phase 6)")
@@ -495,11 +741,18 @@ def main():
     p.add_argument("--auto", action="store_true")
     p.add_argument("--template"); p.add_argument("--max-clips", type=int)
     p.add_argument("--min-score", type=float)
+    p.add_argument("--no-local-highlights", action="store_true",
+                   help="skip local Ollama select; wait for AI highlights by email")
     p.set_defaults(func=cmd_pipeline)
+
+    p = sub.add_parser("check-email", help="Poll the inbox for AI highlight replies")
+    p.set_defaults(func=cmd_email_check)
 
     p = sub.add_parser("batch", help="Process a whole folder (Phase 6)")
     p.add_argument("--template"); p.add_argument("--max-clips", type=int)
     p.add_argument("--min-score", type=float)
+    p.add_argument("--no-local-highlights", action="store_true",
+                   help="skip local Ollama select; wait for AI highlights by email")
     p.set_defaults(func=cmd_batch)
 
     args = parser.parse_args()
