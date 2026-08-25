@@ -237,3 +237,45 @@ def crop_filter(video_path, src_w, src_h, aspect="9:16", fallback_center=True):
 def _esc_expr(expr):
     """Escape :, , and \\ so the expression survives an ffmpeg filtergraph."""
     return str(expr).replace("\\", "\\\\").replace(":", "\\:").replace(",", "\\,")
+
+
+def subject_box(video_path, src_w=None, src_h=None, out_w=1080, out_h=1920):
+    """Return a BoundingBox in the OUTPUT canvas space covering where the
+    dominant face appears, or None if no face / no mediapipe.
+
+    Used by the text layout engine to penalize text over the subject. The box
+    is a coarse, conservative region (face + a margin) so the layout engine
+    treats a generous area as 'subject' and tries to route text around it."""
+    video_path = Path(video_path)
+    try:
+        samples, size, _ = _sample_centers(video_path)
+    except Exception:
+        return None
+    if size:
+        src_w, src_h = size
+    if not src_w or not src_h or not samples:
+        return None
+    # median normalized face-x across the clip (the dominant speaker)
+    nxs = [nx for _, nx in samples]
+    nx = sorted(nxs)[len(nxs) // 2]
+    # Map face center into the OUTPUT canvas. The crop already follows the
+    # face, so in the cropped output frame the face sits near horizontal center.
+    # Vertical: faces are usually in the upper-middle third of the frame.
+    face_w_out = int(out_w * 0.34)   # generous face+head width
+    face_h_out = int(out_h * 0.30)   # face+upper-torso height
+    # face-x in output: crop centers on the face -> ~center horizontally
+    cx_out = int(nx * out_w)
+    cx_out = max(face_w_out // 2, min(out_w - face_w_out // 2, cx_out))
+    # vertical: assume face sits ~25%-55% down the output frame
+    cy_out = int(out_h * 0.40)
+    box_x = cx_out - face_w_out // 2
+    box_y = cy_out - face_h_out // 2
+    # clamp to canvas
+    box_x = max(0, min(out_w - face_w_out, box_x))
+    box_y = max(0, min(out_h - face_h_out, box_y))
+    # return as a lightweight object the layout engine understands
+    class _Box:
+        pass
+    b = _Box()
+    b.x, b.y, b.width, b.height = box_x, box_y, face_w_out, face_h_out
+    return b

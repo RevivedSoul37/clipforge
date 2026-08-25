@@ -147,6 +147,11 @@ class Config:
         self.vision_frames_per_variant = int(vis.get("frames_per_variant", 2))
         self.vision_temperature = float(vis.get("temperature", 0.1))
 
+        tg = _deep_get(self.data, "telegram", {}) or {}
+        self.telegram_enabled = bool(tg.get("enabled", True))
+        self.telegram_bot_token = self.env.get("TELEGRAM_BOT_TOKEN", "")
+        self.telegram_chat_id = self.env.get("TELEGRAM_CHAT_ID", "")
+
         exp = _deep_get(self.data, "explore", {}) or {}
         self.explore_max_variants = int(exp.get("max_variants", 10))
         self.explore_preview_resolution = exp.get("preview_resolution", "540x960")

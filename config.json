@@ -52,6 +52,9 @@
     "frames_per_variant": 2,
     "temperature": 0.1
   },
+  "telegram": {
+    "enabled": true
+  },
   "explore": {
     "max_variants": 10,
     "preview_resolution": "540x960",

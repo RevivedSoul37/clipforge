@@ -3,6 +3,7 @@
 Serves the static frontend (web/) and a small REST API that runs the pipeline as
 a subprocess and exposes live logs + progress. Run with: python server.py
 """
+import asyncio
 import json
 import os
 import subprocess
@@ -32,6 +33,7 @@ for _stream in ("stdout", "stderr"):
 from src.config import config  # noqa: E402
 from src import campaigns as camp_mod  # noqa: E402
 from src import email_highlights  # noqa: E402
+from src import notify as notify_mod  # noqa: E402
 
 WEB_DIR = ROOT / "web"
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -64,6 +66,19 @@ def publish_event(kind, data=None):
             del EVENTS[:len(EVENTS) - 500]
         for waiter in EVENT_WAITERS:
             waiter.set()
+
+
+# Telegram sink: every bus event is also dispatched to the configured chat
+# (non-blocking queue; a no-op when TELEGRAM_* secrets are missing).
+notify_mod.hook_publish_event(sys.modules[__name__])
+
+
+def _mode_from_argv(argv):
+    """Pipeline mode from a start_run argv: [--campaign, id,] mode, …"""
+    a = list(argv)
+    if a and a[0] == "--campaign":
+        a = a[2:]
+    return a[0] if a else "pipeline"
 
 
 # --------------------------------------------------------------------------- #
@@ -148,6 +163,19 @@ def _run_subprocess(run_id, argv):
             run["error"] = _error_from_logs(run["logs"])
     print(f"\n<<< run {run_id} finished ({run['status']})\n", flush=True)
 
+    # Lifecycle events — one per run terminal state. export / explore-style
+    # successes are skipped here because main.py emits richer export_done /
+    # explore_done events for those (republished via @@EVENT@@).
+    mode = _mode_from_argv(run.get("argv") or [])
+    ev_common = {"mode": mode, "video_id": run.get("video_id"),
+                  "campaign_id": run.get("campaign_id")}
+    if run["status"] == "cancelled":
+        publish_event("run_cancelled", ev_common)
+    elif run["status"] == "error":
+        publish_event("run_error", {**ev_common, "error": run.get("error")})
+    elif mode not in ("export", "explore-style"):
+        publish_event("run_ok", ev_common)
+
 
 def start_run(argv, campaign_id=None, video_id=None):
     run_id = uuid.uuid4().hex[:12]
@@ -158,6 +186,7 @@ def start_run(argv, campaign_id=None, video_id=None):
             "command": "", "exit_code": None, "error": None,
             "cancelled": False, "proc": None,
             "campaign_id": campaign_id, "video_id": video_id,
+            "argv": list(argv),
         }
     threading.Thread(target=_run_subprocess, args=(run_id, argv), daemon=True).start()
     return run_id
@@ -417,6 +446,10 @@ async def api_state(request):
             "input_dir": str(_input_dir(campaign_id)),
             "output_dir": str(_output_dir(campaign_id)),
         },
+        "telegram": {
+            "enabled": bool(config.telegram_enabled),
+            "configured": bool(config.telegram_bot_token and config.telegram_chat_id),
+        },
     })
 
 
@@ -519,6 +552,8 @@ async def api_run(request):
             argv += ["--min-score", str(min_score)]
         if max_clips is not None:
             argv += ["--max-clips", str(max_clips)]
+        if data.get("local"):
+            argv += ["--local"]
     elif mode == "frames":
         if data.get("frames_mode"):
             argv += ["--mode", str(data["frames_mode"])]
@@ -543,10 +578,16 @@ async def api_run(request):
     elif mode == "cut":
         if auto:
             argv += ["--auto"]
-    # transcribe / context take no extra args from the UI
+    elif mode == "transcribe":
+        if data.get("skip_email"):
+            argv += ["--skip-email"]
+    # context takes no extra args from the UI
 
     video_id = Path(video).stem if video else None
     run_id = start_run(argv, campaign_id=campaign_id, video_id=video_id)
+    publish_event("run_started", {"mode": mode, "video": video_id,
+                                    "video_id": video_id,
+                                    "campaign_id": campaign_id})
     return JSONResponse({"run": run_id})
 
 
@@ -631,6 +672,60 @@ async def api_save_candidates(request):
         camp.touch()
         camp_mod.sync_clips_from_candidates(camp, video_id, cleaned, status="reviewing")
     return JSONResponse({"ok": True, "count": len(cleaned)})
+
+
+async def api_highlights_upload(request):
+    """Upload a highlights JSON file (video_id + clips[] with segment ids)
+    and ingest it exactly like an emailed AI reply — segment ids are resolved
+    against the stored transcript into the same candidates file review uses."""
+    import anyio
+    from src.email_highlights import ingest_highlight_payload
+
+    form = await request.form()
+    upload = form.get("file")
+    video_id = (form.get("video_id") or "").strip()
+    if not upload or not getattr(upload, "filename", None):
+        return JSONResponse({"error": "no file uploaded"}, status_code=400)
+    if not video_id:
+        return JSONResponse({"error": "need video_id"}, status_code=400)
+
+    raw = await upload.read()
+    if not raw:
+        return JSONResponse({"error": "uploaded file was empty"}, status_code=400)
+    try:
+        payload = json.loads(raw.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return JSONResponse({"error": f"invalid JSON: {exc}"}, status_code=400)
+    if not isinstance(payload, dict) or not isinstance(payload.get("clips"), list):
+        return JSONResponse({"error": "JSON must be an object with a clips[] list"},
+                            status_code=400)
+    if not payload.get("video_id"):
+        payload["video_id"] = video_id
+
+    def _ingest():
+        return ingest_highlight_payload(payload, source="upload")
+
+    try:
+        out_path = await anyio.to_thread.run_sync(_ingest)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"ingest failed: {exc}"}, status_code=500)
+    if out_path is None:
+        return JSONResponse({
+            "error": (f"could not ingest highlights — check that a transcript "
+                      f"exists for '{payload.get('video_id')}' and the JSON has "
+                      f"valid clips with segment ids"),
+        }, status_code=400)
+    try:
+        clip_count = len(json.loads(out_path.read_text(encoding="utf-8")).get("clips") or [])
+    except Exception:  # noqa: BLE001
+        clip_count = len(payload.get("clips") or [])
+    publish_event("highlights_received", {
+        "video_id": payload.get("video_id"),
+        "clip_count": clip_count,
+        "source": "upload",
+    })
+    return JSONResponse({"ok": True, "video_id": payload.get("video_id"),
+                         "clip_count": clip_count})
 
 
 async def api_broll(request):
@@ -786,6 +881,9 @@ async def api_upload(request):
     camp = _camp(campaign_id)
     if camp:
         camp.touch()
+    publish_event("upload_done", {"name": dest.name, "size": size,
+                                    "video_id": dest.stem,
+                                    "campaign_id": campaign_id})
     return JSONResponse({"name": dest.name, "id": dest.stem, "size": size})
 
 
@@ -915,6 +1013,8 @@ async def api_campaigns_create(request):
         camp = camp_mod.create_campaign(data.get("name"))
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
+    publish_event("campaign_created", {"name": camp.meta.get("name"),
+                                         "id": camp.id})
     return JSONResponse(_public(camp, detail=True), status_code=201)
 
 
@@ -1047,8 +1147,9 @@ async def api_campaign_rules_upload(request):
         return JSONResponse({"error": "uploaded file was empty"}, status_code=400)
     try:
         dest = camp_mod.save_rules_upload(camp, raw_name, data)
-        extracted = camp_mod.extract_rules_text(dest)
-        summary = camp_mod.summarize_rules(extracted)
+        extracted = await asyncio.to_thread(camp_mod.extract_rules_text, dest)
+        summary, warning = await asyncio.to_thread(
+            camp_mod.summarize_rules, extracted)
         camp.write_rules_summary(summary)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
@@ -1058,6 +1159,7 @@ async def api_campaign_rules_upload(request):
         "ok": True,
         "rules_summary": summary,
         "rules_full": dest.name,
+        "warning": warning,
     })
 
 
@@ -1290,6 +1392,7 @@ routes = [
     Route("/api/run/{run_id}", api_run_status, methods=["GET"]),
     Route("/api/run/{run_id}/cancel", api_run_cancel, methods=["POST"]),
     Route("/api/candidates", api_save_candidates, methods=["POST"]),
+    Route("/api/highlights/upload", api_highlights_upload, methods=["POST"]),
     Route("/api/rules", api_rules_get, methods=["GET"]),
     Route("/api/rules", api_rules_save, methods=["POST"]),
     Route("/api/music", api_music_get, methods=["GET"]),

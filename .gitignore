@@ -10,6 +10,9 @@ output/
 music/
 data/
 
+# local source-video dumps (large files, never commit)
+abu/
+
 # generated style-explorer artifacts (auto-written per video, not hand-authored)
 templates/*_winner.json
 

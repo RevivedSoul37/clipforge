@@ -273,6 +273,10 @@ def generate_variants(video_stem, max_variants=None, constraints=None):
         style = CAPTION_STYLES[style_key]
         if "red" in banned_colors and style.get("highlight_keyword", {}).get("color") in RED_HEXES:
             continue
+        # position is now a REGION preference (top/middle/bottom band), not an
+        # absolute margin_v. The layout engine resolves actual coordinates from
+        # this normalized preference + safe zones + collisions — both for the
+        # low-res preview and the full-quality export, identically.
         position = rng.choice(["bottom", "center"])
         size = rng.choice(sizes)
         hook = rng.choice(hook_pool)
@@ -280,6 +284,8 @@ def generate_variants(video_stem, max_variants=None, constraints=None):
         vignette = "vignette" in prefer and rng.random() < 0.6
         music = rng.choice(music_choices)
 
+        cap_pos = "middle_center" if position == "center" else "bottom_center"
+        anchor = "band" if crop == "letterbox" else "frame"
         tpl = {
             "name": "",
             "output": {"aspect_ratio": "9:16", "resolution": "1080x1920"},
@@ -288,13 +294,11 @@ def generate_variants(video_stem, max_variants=None, constraints=None):
             "effects": {"grade": grade, "vignette": 0.5 if vignette else 0.0},
             "hook": {"enabled": True, "font": hook["font"], "size": 96,
                      "color": hook["color"], "position": "top",
-                     "margin_v": 60 if crop == "letterbox" else 180,
-                     "anchor": "band" if crop == "letterbox" else "frame"},
+                     "anchor": anchor},
             "captions": {
                 "enabled": True, "font": font, "size": size,
-                "position": "middle_center" if position == "center" else "bottom_center",
-                "max_words": 4,
-                "anchor": "band" if crop == "letterbox" else "frame",
+                "position": cap_pos, "anchor": anchor,
+                "max_words": 4, "max_lines": 3,
             },
             "music": {"enabled": music, "track": "", "volume": 0.12},
             "broll": {"enabled": False, "mode": "cutaway", "pip_scale": 0.6},
@@ -302,8 +306,7 @@ def generate_variants(video_stem, max_variants=None, constraints=None):
             "outro": {"enabled": False},
             "watermark": {"enabled": False},
         }
-        if position == "bottom":
-            tpl["captions"]["margin_v"] = rng.choice([420, 445, 470])
+        # caption color/gradient/keyword styling from the style axis
         tpl["captions"].update({k: v for k, v in style.items() if k != "color"
                                 or not tpl["captions"].get("gradient", {}).get("enabled")})
         tpl["captions"]["color"] = style["color"]

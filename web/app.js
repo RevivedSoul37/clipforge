@@ -15,29 +15,33 @@
     campaignGrid: $("#campaignGrid"),
     newCampaignForm: $("#newCampaignForm"),
     campName: $("#campName"),
+    campBriefInput: $("#campBriefInput"),
+    briefAttachLabel: $("#briefAttachLabel"),
+    briefAttach: $("#briefAttach"),
+    ovRulesEmpty: $("#ovRulesEmpty"),
+    ovRulesBody: $("#ovRulesBody"),
+    ovRulesInput: $("#ovRulesInput"),
+    ovRulesViewFull: $("#ovRulesViewFull"),
+    ovRulesUploadLbl: $("#ovRulesUploadLbl"),
     campDetailName: $("#campDetailName"),
     campDetailMeta: $("#campDetailMeta"),
-    funnel: $("#funnel"),
+    funnelStrip: $("#funnelStrip"),
     overviewEmpty: $("#overviewEmpty"),
-    btnAddSources: $("#btnAddSources"),
-    sourceList: $("#sourceList"),
-    fileInput: $("#fileInput"),
+    sourceBoard: $("#sourceBoard"),
     uploadBtn: $("#uploadBtn"),
+    uploadDropTitle: $("#uploadDropTitle"),
+    fileInput: $("#fileInput"),
     uploadProgress: $("#uploadProgress"),
     uploadFill: $("#uploadFill"),
     uploadPct: $("#uploadPct"),
     minScore: $("#minScore"),
     maxClips: $("#maxClips"),
-    localHighlights: $("#localHighlights"),
     reviewCount: $("#reviewCount"),
     reviewList: $("#reviewList"),
     reviewEmpty: $("#reviewEmpty"),
     reviewHint: $("#reviewHint"),
     btnApproveAll: $("#btnApproveAll"),
     btnSaveReview: $("#btnSaveReview"),
-    approvedCount: $("#approvedCount"),
-    approvedList: $("#approvedList"),
-    approvedEmpty: $("#approvedEmpty"),
     templateSelect: $("#templateSelect"),
     goldenStyles: $("#goldenStyles"),
     templateDesc: $("#templateDesc"),
@@ -76,14 +80,12 @@
     bellDropdown: $("#bellDropdown"),
     bellList: $("#bellList"),
     bellClear: $("#bellClear"),
-    approvalCount: $("#approvalCount"),
-    approvalList: $("#approvalList"),
-    approvalEmpty: $("#approvalEmpty"),
-    btnEmailCheck: $("#btnEmailCheck"),
     transcriptModal: $("#transcriptModal"),
     transcriptVideoName: $("#transcriptVideoName"),
     transcriptBody: $("#transcriptBody"),
     transcriptClose: $("#transcriptClose"),
+    transcriptFind: $("#transcriptFind"),
+    transcriptCopy: $("#transcriptCopy"),
     btnDeleteCampaign: $("#btnDeleteCampaign"),
     highlightToggle: $("#highlightToggle"),
     highlightToggleHint: $("#highlightToggleHint"),
@@ -101,6 +103,10 @@
     exportConfigCancel: $("#exportConfigCancel"),
     exportConfigStart: $("#exportConfigStart"),
     exportConfigClose: $("#exportConfigClose"),
+    settingsExportSelect: $("#settingsExportSelect"),
+    btnSettingsExport: $("#btnSettingsExport"),
+    settingsExportHint: $("#settingsExportHint"),
+    telegramStatus: $("#telegramStatus"),
   };
 
   const LABELS = {
@@ -121,14 +127,14 @@
     done: "Finished",
   };
 
-  const WORKSPACE_PAGES = ["overview", "sources", "approval", "candidates", "approved", "exports", "settings"];
+  const WORKSPACE_PAGES = ["overview", "review", "exports", "settings"];
   const ALL_PAGES = ["dashboard"].concat(WORKSPACE_PAGES);
   const FUNNEL_STEPS = [
-    { key: "sources", label: "Sources", page: "sources" },
-    { key: "transcribed", label: "Transcribed", page: "sources" },
-    { key: "analysed", label: "Analysed", page: "sources" },
-    { key: "candidates", label: "Candidates", page: "candidates" },
-    { key: "approved", label: "Approved", page: "approved" },
+    { key: "sources", label: "Sources", page: "overview" },
+    { key: "transcribed", label: "Transcribed", page: "overview" },
+    { key: "analysed", label: "Analysed", page: "overview" },
+    { key: "candidates", label: "Candidates", page: "review" },
+    { key: "approved", label: "Approved", page: "review" },
     { key: "exported", label: "Exported", page: "exports" },
   ];
   const STAGE_LABELS = {
@@ -214,8 +220,8 @@
       item.addEventListener("click", () => {
         n.read = true;
         renderNotifications();
-        if (n.campaignId && n.campaignId !== currentCampaignId) go("approval", n.campaignId);
-        else if (n.campaignId) go("approval");
+        if (n.campaignId && n.campaignId !== currentCampaignId) go("review", n.campaignId);
+        else if (n.campaignId) go("review");
       });
       els.bellList.appendChild(item);
     }
@@ -259,33 +265,77 @@
     setTimeout(pollEvents, 400);
   }
 
+  const EVENT_UI = {
+    run_started:      { icon: "⏳", label: (d) => `${d.mode || "run"} started`,
+                        body: (d) => `“${d.video || d.video_id || "?"}” is being processed.` },
+    run_ok:           { icon: "✅", label: (d) => `${d.mode || "run"} finished`,
+                        body: (d) => `“${d.video_id || "?"}” completed.` },
+    run_error:        { icon: "❌", label: (d) => `${d.mode || "run"} failed`,
+                        body: (d) => d.error ? String(d.error).slice(-160) : "Check the run log." },
+    run_cancelled:    { icon: "⏹", label: (d) => `${d.mode || "run"} cancelled`,
+                        body: (d) => `“${d.video_id || "?"}” was cancelled.` },
+    export_done:      { icon: "🎬", label: () => "Export finished",
+                        body: (d) => `${d.clip_count || 0} clip(s) for “${d.video_id || "?"}”.` },
+    explore_done:     { icon: "🎨", label: () => "Style exploration finished",
+                        body: (d) => d.winner
+                          ? `Winner: ${d.winner}${d.total != null ? ` (${Number(d.total).toFixed(1)})` : ""}`
+                          : "Done." },
+    upload_done:      { icon: "⬆", label: () => "Video uploaded",
+                        body: (d) => d.name || "" },
+    campaign_created: { icon: "📁", label: () => "Campaign created",
+                        body: (d) => d.name || d.id || "" },
+  };
+
+  function notifyRunEvent(kind, d) {
+    const ui = EVENT_UI[kind];
+    if (!ui) return;
+    const title = ui.label(d);
+    const body = ui.body(d);
+    const level = kind === "run_error" ? "error" : (kind === "run_started" || kind === "run_cancelled" ? "info" : "ok");
+    toast(title, level);
+    addNotification(kind, title, body, currentCampaignId, ui.icon);
+    desktopNotify("ClipForge — " + title, body);
+    if (kind === "run_ok" || kind === "export_done" || kind === "explore_done") {
+      refreshCampaignData().catch(() => {});
+    }
+  }
+
   function handleEvent(ev) {
     const d = ev.data || {};
     if (ev.kind === "transcript_sent") {
       notifyTranscriptSent(d.video_id, d.recipients, !!d.sent);
     } else if (ev.kind === "highlights_received") {
       notifyHighlightsReceived(d.video_id, d.clip_count || 0);
+    } else if (EVENT_UI[ev.kind]) {
+      notifyRunEvent(ev.kind, d);
     }
   }
 
   // --- transcript modal -------------------------------------------------- //
+  let transcriptModalVideoId = null;
+
   function openTranscriptModal(videoId) {
+    transcriptModalVideoId = videoId;
     els.transcriptVideoName.textContent = videoId;
     els.transcriptBody.textContent = "Loading…";
     els.transcriptModal.hidden = false;
+    if (els.transcriptFind) els.transcriptFind.disabled = !!currentRun;
     fetch("/api/transcript/" + encodeURIComponent(videoId) + campQ())
       .then((r) => r.json())
       .then((d) => {
         els.transcriptBody.textContent = d.body || "No transcript available.";
+        if (els.transcriptFind) els.transcriptFind.disabled = !!currentRun || !d.body;
       })
       .catch(() => {
         els.transcriptBody.textContent = "Could not load the transcript.";
+        if (els.transcriptFind) els.transcriptFind.disabled = true;
       });
   }
 
   function closeTranscriptModal() {
     els.transcriptModal.hidden = true;
     els.transcriptBody.textContent = "";
+    transcriptModalVideoId = null;
   }
 
   async function apiGet(url) {
@@ -427,18 +477,18 @@
     }
     updateNav();
     if (page === "dashboard") renderDashboard();
-    if (page === "overview") renderOverview();
-    if (page === "sources") renderSources();
-    if (page === "approval") renderApproval();
-    if (page === "candidates") renderCandidates();
-    if (page === "approved") renderApproved();
+    if (page === "overview") {
+      renderOverview();
+      renderSourceBoard();
+    }
+    if (page === "review") renderReview();
     if (page === "exports") {
       renderExports();
       renderExploreControls();
     }
     if (page === "settings") {
-      renderRules();
       renderTemplates();
+      renderSettingsExport();
       refreshStyleState();
     }
   }
@@ -521,29 +571,47 @@
     els.campDetailName.textContent = currentCampaign.name;
     els.campDetailMeta.textContent = relTime(currentCampaign.updated_at);
     renderHighlightToggle();
-    els.funnel.innerHTML = "";
-    FUNNEL_STEPS.forEach((step, i) => {
-      const n = f[step.key] || 0;
-      const done = n > 0;
-      const li = document.createElement("li");
-      li.className = "funnel-step" + (done ? " done" : "");
-      li.innerHTML =
-        `<button type="button" class="funnel-link">` +
-        `<span class="funnel-tick" aria-hidden="true"></span>` +
-        `<span class="funnel-label">${escapeHtml(step.label)}</span>` +
-        `<span class="funnel-n">${n}</span>` +
-        `</button>`;
-      li.querySelector("button").addEventListener("click", () => go(step.page));
-      els.funnel.appendChild(li);
-      if (i < FUNNEL_STEPS.length - 1) {
-        const rail = document.createElement("li");
-        rail.className = "funnel-rail" + (done ? " done" : "");
-        rail.setAttribute("aria-hidden", "true");
-        els.funnel.appendChild(rail);
-      }
-    });
+    renderOverviewRules();
+    renderFunnelStrip(f);
     const empty = !(f.sources);
     els.overviewEmpty.hidden = !empty;
+  }
+
+  function renderFunnelStrip(f) {
+    if (!els.funnelStrip) return;
+    els.funnelStrip.innerHTML = "";
+    FUNNEL_STEPS.forEach((step) => {
+      const n = f[step.key] || 0;
+      const done = n > 0;
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "funnel-chip" + (done ? " done" : "");
+      chip.innerHTML =
+        `<span class="fc-label">${escapeHtml(step.label)}</span>` +
+        `<span class="fc-n">${n}</span>`;
+      chip.addEventListener("click", () => go(step.page));
+      els.funnelStrip.appendChild(chip);
+    });
+  }
+
+  function renderOverviewRules() {
+    if (!els.ovRulesBody) return;
+    const rules = campaignRules();
+    const has = hasRulesContent(rules);
+    els.ovRulesEmpty.hidden = has;
+    els.ovRulesBody.hidden = !has;
+    els.ovRulesUploadLbl.hidden = !has;
+    if (currentCampaign && currentCampaign.rules_full) {
+      els.ovRulesViewFull.hidden = !has;
+      els.ovRulesViewFull.href = "/api/campaigns/" + encodeURIComponent(currentCampaignId) + "/rules/file";
+    } else {
+      els.ovRulesViewFull.hidden = true;
+    }
+    if (!has) return;
+    els.ovRulesBody.innerHTML = "";
+    for (const sec of RULE_SECTIONS) {
+      els.ovRulesBody.appendChild(rulesSectionEl(sec, rules));
+    }
   }
 
   function renderHighlightToggle() {
@@ -554,7 +622,7 @@
     });
     els.highlightToggleHint.textContent = local
       ? "Highlights picked locally by Ollama (" + (state ? state.config.llm_model : "Gemma") + ")."
-      : "Transcript is emailed out; the AI replies with highlight picks you approve on the Approval page.";
+      : "Transcript is emailed out; the AI replies with highlight picks you approve on the Review page.";
   }
 
   async function deleteCampaign() {
@@ -586,35 +654,169 @@
     return !!currentRun && (!runningVideoId || runningVideoId === id);
   }
 
-  function renderSources() {
-    els.sourceList.innerHTML = "";
+  function hasTranscriptStage(stage) {
+    return ["transcribed", "analysed", "has_approved", "exported", "awaiting"].includes(stage);
+  }
+
+  async function uploadHighlightsJson(videoId) {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = ".json,application/json";
+    inp.style.display = "none";
+    document.body.appendChild(inp);
+    return new Promise((resolve) => {
+      inp.addEventListener("change", async () => {
+        const file = inp.files && inp.files[0];
+        inp.remove();
+        if (!file) { resolve(); return; }
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("video_id", videoId);
+        if (currentCampaignId) fd.append("campaign_id", currentCampaignId);
+        try {
+          toast("Uploading highlights…");
+          const r = await fetch("/api/highlights/upload", { method: "POST", body: fd });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data.error || r.status);
+          toast(`Ingested ${data.clip_count} highlight(s) for ${data.video_id}.`, "ok");
+          await refreshCampaignData();
+          go("review");
+        } catch (e) {
+          toast("Upload failed: " + e.message, "error");
+        }
+        resolve();
+      });
+      inp.addEventListener("cancel", () => { inp.remove(); resolve(); });
+      inp.click();
+    });
+  }
+
+  const STAGE_RAIL = ["uploaded", "transcribed", "analysed", "reviewed", "exported"];
+
+  function stageRailIndex(stage) {
+    const s = stage || "uploaded";
+    if (s === "exported") return 4;
+    if (s === "has_approved") return 3;
+    if (s === "analysed" || s === "awaiting") return 2;
+    if (s === "transcribed") return 1;
+    return 0;
+  }
+
+  function renderSourceBoard() {
+    if (!els.sourceBoard) return;
+    els.sourceBoard.innerHTML = "";
     if (!sources.length) {
-      els.sourceList.innerHTML = `<div class="empty">No videos yet — add one on the right.</div>`;
+      els.sourceBoard.hidden = true;
+      if (els.uploadDropTitle) els.uploadDropTitle.textContent = "Drop a video to start this campaign";
       return;
     }
+    els.sourceBoard.hidden = false;
+    if (els.uploadDropTitle) els.uploadDropTitle.textContent = "Add another source";
     for (const v of sources) {
-      const row = document.createElement("div");
-      row.className = "source-row";
-      const mb = (v.size / 1048576).toFixed(v.size > 104857600 ? 0 : 1);
-      const busy = sourceBusy(v.id) || v.running;
-      const canExport = (v.approved || 0) > 0 && !busy;
-      row.innerHTML =
-        `<div class="source-main">` +
-        `<span class="v-name">${escapeHtml(v.name)}</span>` +
-        `<span class="v-size">${mb} MB</span>` +
-        `<span class="stage-chip stage-${escapeHtml(v.stage || "uploaded")}">${escapeHtml(STAGE_LABELS[v.stage] || v.stage || "")}</span>` +
-        `<span class="v-counts">${v.candidates || 0} cand · ${v.approved || 0} appr</span>` +
-        `</div>` +
-        `<div class="source-actions">` +
-        `<button class="btn btn-small btn-primary btn-analyze" ${busy ? "disabled" : ""}>Find highlights</button>` +
-        `<button class="btn btn-small btn-ghost btn-export" ${canExport ? "" : "disabled"}>Export approved</button>` +
-        `<button class="v-del" title="Delete source video" aria-label="Delete ${escapeHtml(v.name)}">✕</button>` +
-        `</div>`;
-      row.querySelector(".btn-analyze").addEventListener("click", () => startRun("analyze", v.id, false));
-      row.querySelector(".btn-export").addEventListener("click", () => openExportConfig("export", v.id, false));
-      row.querySelector(".v-del").addEventListener("click", () => deleteVideo(v));
-      els.sourceList.appendChild(row);
+      els.sourceBoard.appendChild(sourceCardEl(v));
     }
+  }
+
+  function sourceCardEl(v) {
+    const stage = v.stage || "uploaded";
+    const busy = sourceBusy(v.id) || v.running;
+    const mb = (v.size / 1048576).toFixed(v.size > 104857600 ? 0 : 1);
+    const card = document.createElement("div");
+    card.className = "source-card" + (busy ? " busy" : "");
+    const railIdx = stageRailIndex(stage);
+    const rail = STAGE_RAIL.map((name, i) => {
+      const filled = i <= railIdx ? " fill" : "";
+      const pulse = (stage === "awaiting" && i === 2) ? " pulse" : "";
+      return `<span class="sr-dot${filled}${pulse}" title="${name}"></span>`;
+    }).join("");
+    card.innerHTML =
+      `<div class="source-card-head">` +
+      `<span class="v-name">${escapeHtml(v.name)}</span>` +
+      `<span class="v-size">${mb} MB</span>` +
+      `<span class="stage-chip stage-${escapeHtml(stage)}${busy ? " busy" : ""}">${escapeHtml(STAGE_LABELS[stage] || stage)}</span>` +
+      `<span class="v-counts">${v.candidates || 0} cand · ${v.approved || 0} appr</span>` +
+      `</div>` +
+      `<div class="source-stage-rail">${rail}</div>` +
+      `<div class="source-card-actions"></div>`;
+    const actions = card.querySelector(".source-card-actions");
+    const canReselect = ["analysed", "has_approved", "exported"].includes(stage) && !busy;
+    let primaryLabel, primaryAction, primaryClass = "btn-primary";
+    switch (stage) {
+      case "uploaded":
+      case "transcribed":
+        primaryLabel = "Find highlights";
+        primaryAction = () => startRun("analyze", v.id, false);
+        break;
+      case "analysed":
+        primaryLabel = `Review ${v.candidates || 0} candidates`;
+        primaryAction = () => go("review");
+        break;
+      case "has_approved":
+        primaryLabel = `Export ${v.approved || 0} approved`;
+        primaryAction = () => openExportConfig("export", v.id, false);
+        break;
+      case "exported":
+        primaryLabel = `View ${v.exported || 0} clips`;
+        primaryAction = () => go("exports");
+        break;
+      case "awaiting":
+        primaryLabel = "Waiting for highlights";
+        primaryAction = null;
+        primaryClass = "btn-ghost";
+        break;
+      default:
+        primaryLabel = "Find highlights";
+        primaryAction = () => startRun("analyze", v.id, false);
+        break;
+    }
+    const primary = document.createElement("button");
+    primary.className = "btn btn-small " + primaryClass;
+    primary.textContent = primaryLabel;
+    primary.disabled = busy || !primaryAction;
+    if (primaryAction) primary.addEventListener("click", primaryAction);
+    actions.appendChild(primary);
+    if (stage === "uploaded" && !busy) {
+      // transcript-only path: skip highlight finding entirely; upload JSON later
+      const trOnly = document.createElement("button");
+      trOnly.className = "btn btn-small btn-ghost";
+      trOnly.textContent = "Transcript only";
+      trOnly.title = "Stop after transcription — no highlight selection, no email. Attach a highlights JSON afterwards.";
+      trOnly.addEventListener("click", () => startRun("transcribe", v.id, false, { skip_email: true }));
+      actions.appendChild(trOnly);
+    }
+    if (hasTranscriptStage(stage) && !busy) {
+      // upload path: attach a highlights JSON picked by an external AI
+      const upBtn = document.createElement("button");
+      upBtn.className = "btn btn-small btn-ghost";
+      upBtn.textContent = "Upload highlights";
+      upBtn.title = "Attach a highlights JSON file (video_id + clips with segment ids)";
+      upBtn.addEventListener("click", () => uploadHighlightsJson(v.id));
+      actions.appendChild(upBtn);
+    }
+    if (canReselect) {
+      const reselectBtn = document.createElement("button");
+      reselectBtn.className = "btn btn-small btn-ghost";
+      reselectBtn.textContent = "Re-select";
+      reselectBtn.title = "Re-run highlight selection with the current rules doc (keeps the transcript)";
+      reselectBtn.addEventListener("click", () => startRun("select", v.id, false, { local: true }));
+      actions.appendChild(reselectBtn);
+    }
+    if (hasTranscriptStage(stage)) {
+      const trBtn = document.createElement("button");
+      trBtn.className = "btn btn-small btn-ghost";
+      trBtn.textContent = "Transcript";
+      trBtn.title = "View and copy the full transcript";
+      trBtn.addEventListener("click", () => openTranscriptModal(v.id));
+      actions.appendChild(trBtn);
+    }
+    const del = document.createElement("button");
+    del.className = "source-del";
+    del.title = "Delete source video";
+    del.setAttribute("aria-label", "Delete " + v.name);
+    del.textContent = "✕";
+    del.addEventListener("click", () => deleteVideo(v));
+    actions.appendChild(del);
+    return card;
   }
 
   async function deleteVideo(v) {
@@ -648,10 +850,13 @@
     els.reviewHint.classList.toggle("dirty", dirty);
   }
 
-  function renderCandidates() {
-    const groups = candidateGroups.filter((g) => g.clips && g.clips.length);
+  function renderReview() {
     els.reviewList.innerHTML = "";
-    if (!groups.length) {
+    const clipGroups = candidateGroups.filter((g) => g.clips && g.clips.length);
+    const waitingGroups = candidateGroups.filter((g) =>
+      (g.highlights_from === "email" || g.highlights_from === "pending") && !(g.clips && g.clips.length)
+    );
+    if (!clipGroups.length && !waitingGroups.length) {
       els.reviewCount.textContent = "";
       els.reviewEmpty.hidden = false;
       return;
@@ -660,174 +865,43 @@
     const clips = allClips();
     const approved = clips.filter((c) => c.status === "approved").length;
     els.reviewCount.textContent = `(${clips.length} found · ${approved} approved)`;
-    for (const g of groups) {
+    for (const g of clipGroups) {
       els.reviewList.appendChild(sourceGroupEl(g, g.clips, { actions: true }));
+    }
+    for (const g of waitingGroups) {
+      els.reviewList.appendChild(reviewWaitingGroupEl(g));
     }
     updateReviewHint();
   }
 
-  // --- Approval page ----------------------------------------------------- //
-  // Shows email-mode sources: waiting for the reply, or received highlights
-  // ready for approve/reject → Start clipping.
-  function approvalGroups() {
-    return candidateGroups.filter((g) =>
-      g.highlights_from === "email" || g.highlights_from === "pending");
-  }
-
-  function renderApproval() {
-    els.approvalList.innerHTML = "";
-    const groups = approvalGroups();
-    els.approvalCount.textContent = groups.length ? `(${groups.length})` : "";
-    if (!groups.length) {
-      els.approvalEmpty.hidden = false;
-      return;
-    }
-    els.approvalEmpty.hidden = true;
-    for (const g of groups) {
-      els.approvalList.appendChild(approvalGroupEl(g));
-    }
-  }
-
-  function approvalGroupEl(group) {
+  function reviewWaitingGroupEl(group) {
     const wrap = document.createElement("div");
     wrap.className = "source-group approval-group";
-
-    const clips = group.clips || [];
-    const waiting = group.highlights_from === "pending" && !clips.length;
     const es = group.email_status || {};
     const sentAt = es.sent_at ? relTime(es.sent_at) : null;
     const recipients = (es.recipients || []).join(", ");
-
     const head = document.createElement("div");
     head.className = "source-group-head approval-head";
     head.innerHTML = `<h3 class="eyebrow">${escapeHtml(group.source_name || group.source_id)}</h3>`;
     wrap.appendChild(head);
-
-    if (waiting) {
-      const card = document.createElement("div");
-      card.className = "card approval-waiting";
-      card.innerHTML =
-        `<div class="approval-status">` +
-        `<span class="pill pill-await">Awaiting highlights</span>` +
-        `<span class="approval-meta">Transcript emailed${recipients ? " to " + escapeHtml(recipients) : ""}` +
-        `${sentAt ? " · " + escapeHtml(sentAt) : ""}</span>` +
-        `</div>` +
-        `<p class="hint">The transcript has been sent. When the AI replies with highlight picks, they'll appear here for approval.</p>` +
-        `<div class="card-actions">` +
-        `<button class="btn btn-small btn-ghost btn-view-transcript">View transcript</button>` +
-        `<button class="btn btn-small btn-ghost btn-check-now">Check inbox now</button>` +
-        `</div>`;
-      card.querySelector(".btn-view-transcript").addEventListener("click",
-        () => openTranscriptModal(group.source_id));
-      card.querySelector(".btn-check-now").addEventListener("click", () => checkInboxNow());
-      wrap.appendChild(card);
-      return wrap;
-    }
-
-    // Received highlights: show clips with approve/reject + Start clipping.
-    const approved = clips.filter((c) => c.status === "approved").length;
-    const statusRow = document.createElement("div");
-    statusRow.className = "approval-status";
-    statusRow.innerHTML =
-      `<span class="pill pill-ok">Highlights received</span>` +
-      `<span class="approval-meta">${clips.length} pick${clips.length === 1 ? "" : "s"} · ${approved} approved</span>`;
-    wrap.appendChild(statusRow);
-
-    const cardGrid = document.createElement("div");
-    cardGrid.className = "cards";
-    clips.forEach((clip, i) => cardGrid.appendChild(approvalClipCard(clip, i, group)));
-    wrap.appendChild(cardGrid);
-
-    const actions = document.createElement("div");
-    actions.className = "approval-actions";
-    actions.innerHTML =
-      `<button class="btn btn-small btn-ghost btn-view-transcript">View transcript</button>` +
-      `<span class="approval-spacer"></span>` +
-      `<button class="btn btn-small btn-primary btn-start-clip" ${approved ? "" : "disabled"}>▶ Start clipping (${approved})</button>`;
-    const viewBtn = actions.querySelector(".btn-view-transcript");
-    const startBtn = actions.querySelector(".btn-start-clip");
-    viewBtn.addEventListener("click", () => openTranscriptModal(group.source_id));
-    startBtn.addEventListener("click", () => startClipping(group));
-    // reflect approval count on the button as it changes
-    actions.dataset.start = "1";
-    wrap.appendChild(actions);
-    group._startBtn = startBtn;
-    return wrap;
-  }
-
-  function updateApprovalStartBtn(group) {
-    if (!group._startBtn) return;
-    const approved = (group.clips || []).filter((c) => c.status === "approved").length;
-    group._startBtn.disabled = approved === 0;
-    group._startBtn.textContent = `▶ Start clipping (${approved})`;
-  }
-
-  function approvalClipCard(clip, i, group) {
     const card = document.createElement("div");
-    card.className = "card " + (clip.status || "pending");
-
-    const head = document.createElement("div");
-    head.className = "card-head";
-    head.innerHTML =
-      `<span class="badge">#${i + 1}</span>` +
-      `<span class="badge score">${Number(clip.score || 0).toFixed(2)}</span>` +
-      `<span class="card-reason">${escapeHtml(clip.reason || "")}</span>`;
-    card.appendChild(head);
-
-    const times = document.createElement("div");
-    times.className = "card-times";
-    const rangeLabel = document.createTextNode(`→ ${fmt(clip.start)} – ${fmt(clip.end)}`);
-    times.appendChild(rangeLabel);
-    card.appendChild(times);
-
-    const snip = document.createElement("pre");
-    snip.className = "snippet";
-    snip.textContent = snippetFor(clip);
-    card.appendChild(snip);
-
-    if (clip.hook) {
-      const hook = document.createElement("div");
-      hook.className = "approval-hook";
-      hook.innerHTML = `<span class="field-label">Hook</span> ${escapeHtml(clip.hook)}`;
-      card.appendChild(hook);
-    }
-
-    const actions = document.createElement("div");
-    actions.className = "card-actions";
-    const bApprove = document.createElement("button");
-    bApprove.className = "btn-approve" + (clip.status === "approved" ? " on" : "");
-    bApprove.textContent = clip.status === "approved" ? "✓ Approved" : "Approve";
-    bApprove.addEventListener("click", () => {
-      clip.status = clip.status === "approved" ? "pending" : "approved";
-      card.classList.toggle("approved", clip.status === "approved");
-      bApprove.classList.toggle("on", clip.status === "approved");
-      bApprove.textContent = clip.status === "approved" ? "✓ Approved" : "Approve";
-      updateApprovalStartBtn(group);
-    });
-    const bReject = document.createElement("button");
-    bReject.className = "btn-reject" + (clip.status === "rejected" ? " on" : "");
-    bReject.textContent = clip.status === "rejected" ? "✕ Rejected" : "Reject";
-    bReject.addEventListener("click", () => {
-      clip.status = clip.status === "rejected" ? "pending" : "rejected";
-      card.classList.toggle("rejected", clip.status === "rejected");
-      bReject.classList.toggle("on", clip.status === "rejected");
-      bReject.textContent = clip.status === "rejected" ? "✕ Rejected" : "Reject";
-    });
-    const bPreview = document.createElement("button");
-    bPreview.className = "btn-preview";
-    bPreview.textContent = "▶ Preview";
-    bPreview.addEventListener("click", () => previewClip(clip, card, bPreview, group.source_id));
-    actions.appendChild(bApprove);
-    actions.appendChild(bReject);
-    actions.appendChild(bPreview);
-    card.appendChild(actions);
-
-    const slot = document.createElement("div");
-    slot.className = "preview-slot";
-    slot.hidden = true;
-    card.appendChild(slot);
-    restorePreview(clip, card, bPreview);
-    return card;
+    card.className = "card approval-waiting";
+    card.innerHTML =
+      `<div class="approval-status">` +
+      `<span class="pill pill-await">Awaiting highlights</span>` +
+      `<span class="approval-meta">Transcript emailed${recipients ? " to " + escapeHtml(recipients) : ""}` +
+      `${sentAt ? " · " + escapeHtml(sentAt) : ""}</span>` +
+      `</div>` +
+      `<p class="hint">The transcript has been sent. When the AI replies with highlight picks, they'll appear here for approval.</p>` +
+      `<div class="card-actions">` +
+      `<button class="btn btn-small btn-ghost btn-view-transcript">View transcript</button>` +
+      `<button class="btn btn-small btn-ghost btn-check-now">Check inbox now</button>` +
+      `</div>`;
+    card.querySelector(".btn-view-transcript").addEventListener("click",
+      () => openTranscriptModal(group.source_id));
+    card.querySelector(".btn-check-now").addEventListener("click", () => checkInboxNow());
+    wrap.appendChild(card);
+    return wrap;
   }
 
   async function checkInboxNow() {
@@ -863,25 +937,6 @@
       return;
     }
     openExportConfig("export", group.source_id, false);
-  }
-
-  function renderApproved() {
-    els.approvedList.innerHTML = "";
-    const groups = candidateGroups.map((g) => ({
-      ...g,
-      clips: (g.clips || []).filter((c) => c.status === "approved"),
-    })).filter((g) => g.clips.length);
-    const n = groups.reduce((a, g) => a + g.clips.length, 0);
-    els.approvedCount.textContent = n ? `(${n})` : "";
-    if (!groups.length) {
-      els.approvedEmpty.hidden = false;
-      return;
-    }
-    els.approvedEmpty.hidden = true;
-    for (const g of groups) {
-      const wrap = sourceGroupEl(g, g.clips, { preview: true, exportBtn: true });
-      els.approvedList.appendChild(wrap);
-    }
   }
 
   function sourceGroupEl(group, clips, opts) {
@@ -980,7 +1035,7 @@
         bApprove.addEventListener("click", () => {
           clip.status = clip.status === "approved" ? "pending" : "approved";
           dirty = true;
-          renderCandidates();
+          renderReview();
         });
         const bReject = document.createElement("button");
         bReject.className = "btn-reject" + (clip.status === "rejected" ? " on" : "");
@@ -988,7 +1043,7 @@
         bReject.addEventListener("click", () => {
           clip.status = clip.status === "rejected" ? "pending" : "rejected";
           dirty = true;
-          renderCandidates();
+          renderReview();
         });
         actions.appendChild(bApprove);
         actions.appendChild(bReject);
@@ -1057,11 +1112,53 @@
 
   function renderExports() {
     els.outputList.innerHTML = "";
+    // Sources with approved clips but no exports yet — show an actionable
+    // "Export approved" row at the top so the Exports page is where you go
+    // to render, not just a gallery of finished clips.
+    const exportedIds = new Set(exportGroups.filter((g) => g.outputs && g.outputs.length)
+      .map((g) => g.source_id));
+    const ready = candidateGroups.filter((g) => {
+      const approved = (g.clips || []).filter((c) => c.status === "approved").length;
+      return approved > 0;
+    });
+    if (ready.length) {
+      const readyWrap = document.createElement("div");
+      readyWrap.className = "source-group export-ready-group";
+      const head = document.createElement("div");
+      head.className = "source-group-head";
+      head.innerHTML = `<h3 class="eyebrow">Ready to export</h3>`;
+      readyWrap.appendChild(head);
+      const grid = document.createElement("div");
+      grid.className = "cards export-ready-cards";
+      for (const g of ready) {
+        const approved = (g.clips || []).filter((c) => c.status === "approved").length;
+        const hasOut = exportedIds.has(g.source_id);
+        const card = document.createElement("div");
+        card.className = "card export-ready-card";
+        card.innerHTML =
+          `<div class="export-ready-meta">` +
+          `<span class="output-name" title="${escapeHtml(g.source_name || g.source_id)}">${escapeHtml(g.source_name || g.source_id)}</span>` +
+          `<span class="explore-score">${approved} approved</span>` +
+          `</div>`;
+        const btn = document.createElement("button");
+        btn.className = "btn btn-small btn-primary";
+        btn.textContent = hasOut ? "Re-export approved" : "Export approved";
+        btn.disabled = !!currentRun || sourceBusy(g.source_id);
+        btn.addEventListener("click", () => openExportConfig("export", g.source_id, false));
+        card.appendChild(btn);
+        grid.appendChild(card);
+      }
+      readyWrap.appendChild(grid);
+      els.outputList.appendChild(readyWrap);
+    }
+
     const groups = (exportGroups || []).filter((g) => g.outputs && g.outputs.length);
     const n = groups.reduce((a, g) => a + g.outputs.length, 0);
     els.outputCount.textContent = n ? `(${n})` : "";
     if (!groups.length) {
-      els.outputList.innerHTML = `<div class="empty">Nothing exported yet.</div>`;
+      if (!ready.length) {
+        els.outputList.innerHTML += `<div class="empty">Nothing exported yet. Approve clips on the Review page, then export here.</div>`;
+      }
       return;
     }
     for (const g of groups) {
@@ -1202,7 +1299,7 @@
 
   async function startRun(mode, videoId, auto, extra) {
     if (!currentCampaignId) { toast("Open a campaign first.", "error"); go("dashboard"); return; }
-    if (!videoId) { toast("Pick a source first.", "error"); go("sources"); return; }
+    if (!videoId) { toast("Pick a source first.", "error"); go("overview"); return; }
     if (currentRun) { toast("A run is already in progress.", "error"); return; }
     if (dirty && !confirm("You have unsaved review decisions. A new run may overwrite them. Continue?")) return;
 
@@ -1223,6 +1320,7 @@
       min_score: parseFloat(els.minScore && els.minScore.value) || settings.min_score,
       max_clips: parseInt(els.maxClips && els.maxClips.value, 10) || settings.max_clips,
       auto: !!auto,
+      skip_email: !!(extra && extra.skip_email),
     }, extra || {});
     clearLogs();
     try {
@@ -1231,18 +1329,26 @@
       runningVideoId = videoId;
       setRunbar(true);
       updateProgress(0, "start");
-      renderSources();
+      renderSourceBoard();
       poll(async (status) => {
         await refreshAfterRun();
         if (status === "ok") {
-          if (mode === "analyze") {
+          if (mode === "analyze" || mode === "select") {
             const s = campaignSettings();
-            if (s.local_highlights === false || extra && extra.email) {
-              go("approval");
+            if (extra && extra.local) {
+              go("review");
+            } else if (s.local_highlights === false || extra && extra.email) {
+              go("review");
               openTranscriptModal(videoId);
             } else {
-              go("candidates");
+              go("review");
             }
+          }
+          else if (mode === "transcribe") {
+            // transcript-only run: stay on overview, card now offers
+            // "Find highlights" + "Upload highlights" (external JSON)
+            go("overview");
+            toast("Transcript ready — find highlights or upload a highlights JSON.", "ok");
           }
           else if (mode === "export" || mode === "pipeline") go("exports");
           else if (mode === "explore-style") {
@@ -1378,6 +1484,19 @@
     els.modelChip.textContent = state.config.llm_model + " · " + state.config.whisper_model;
     renderStyleVideoSelect();
     renderTemplates();
+    renderTelegramStatus();
+  }
+
+  function renderTelegramStatus() {
+    if (!els.telegramStatus) return;
+    const tg = state && state.telegram;
+    if (!tg || !tg.enabled) {
+      els.telegramStatus.textContent = "Telegram: disabled (telegram.enabled=false in config.json).";
+    } else if (tg.configured) {
+      els.telegramStatus.textContent = "Telegram: configured — pipeline events notify your chat.";
+    } else {
+      els.telegramStatus.textContent = "Telegram: not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env (python main.py telegram-setup).";
+    }
   }
 
   function renderStyleVideoSelect() {
@@ -1392,7 +1511,6 @@
     const s = campaignSettings();
     if (els.minScore && s.min_score != null) els.minScore.value = s.min_score;
     if (els.maxClips && s.max_clips != null) els.maxClips.value = s.max_clips;
-    if (els.localHighlights) els.localHighlights.checked = !!s.local_highlights;
     if (els.musicEnabled) els.musicEnabled.checked = !!s.music_enabled;
     if (els.musicVolume && s.music_volume != null) els.musicVolume.value = s.music_volume;
     if (els.styleBrief) els.styleBrief.value = s.style_brief || "";
@@ -1410,7 +1528,7 @@
     const settings = Object.assign({
       min_score: parseFloat(els.minScore.value),
       max_clips: parseInt(els.maxClips.value, 10),
-      local_highlights: els.localHighlights ? els.localHighlights.checked : true,
+      local_highlights: !!(currentCampaign && currentCampaign.settings && currentCampaign.settings.local_highlights),
       default_template: els.templateSelect.value,
       music_enabled: els.musicEnabled.checked,
       music_track: els.musicTrack.value,
@@ -1524,6 +1642,29 @@
     return gold.length ? gold : tpls.slice(0, 2);
   }
 
+  function renderSettingsExport() {
+    if (!els.settingsExportSelect) return;
+    // sources with approved clips, ready to export
+    const ready = candidateGroups.filter((g) =>
+      (g.clips || []).some((c) => c.status === "approved"));
+    const prev = els.settingsExportSelect.value;
+    els.settingsExportSelect.innerHTML = ready.length
+      ? ready.map((g) => {
+          const approved = (g.clips || []).filter((c) => c.status === "approved").length;
+          return `<option value="${escapeHtml(g.source_id)}">` +
+            `${escapeHtml(g.source_name || g.source_id)} (${approved} approved)</option>`;
+        }).join("")
+      : `<option value="">Nothing approved yet</option>`;
+    if (prev && ready.some((g) => g.source_id === prev)) {
+      els.settingsExportSelect.value = prev;
+    }
+    const canExport = ready.length > 0 && !currentRun;
+    els.btnSettingsExport.disabled = !canExport;
+    els.settingsExportHint.textContent = !ready.length
+      ? "Nothing approved yet — approve clips on the Review page first."
+      : `Ready to render ${ready.length} source${ready.length === 1 ? "" : "s"} with approved clips.`;
+  }
+
   function renderTemplates() {
     if (!els.templateSelect) return;
     const tpls = goldenTemplates();
@@ -1626,6 +1767,11 @@
     }
   }
 
+  function refreshRulesPanels() {
+    renderRules();
+    renderOverviewRules();
+  }
+
   function rulesSectionEl(sec, rules) {
     const wrap = document.createElement("div");
     wrap.className = "rules-sec " + (sec.cls || "");
@@ -1697,7 +1843,7 @@
               { section: "submission_done", value: ev.target.checked }
             );
             currentCampaign.rules_summary = r.rules_summary;
-            renderRules();
+            refreshRulesPanels();
           } catch (e) {
             toast("Could not update: " + e.message, "error");
             ev.target.checked = !ev.target.checked;
@@ -1733,7 +1879,7 @@
           { section: sec.key, value }
         );
         currentCampaign.rules_summary = r.rules_summary;
-        renderRules();
+        refreshRulesPanels();
         toast("Saved " + sec.label + ".", "ok");
       } catch (e) {
         toast("Could not save: " + e.message, "error");
@@ -1777,7 +1923,6 @@
   }
   els.minScore.addEventListener("change", scheduleSettingsSave);
   els.maxClips.addEventListener("change", scheduleSettingsSave);
-  if (els.localHighlights) els.localHighlights.addEventListener("change", scheduleSettingsSave);
   if (els.styleBrief) {
     els.styleBrief.addEventListener("change", scheduleSettingsSave);
     els.styleBrief.addEventListener("blur", scheduleSettingsSave);
@@ -1800,6 +1945,13 @@
   if (els.exportConfigCancel) els.exportConfigCancel.addEventListener("click", closeExportConfig);
   if (els.exportConfigClose) els.exportConfigClose.addEventListener("click", closeExportConfig);
   if (els.exportConfigStart) els.exportConfigStart.addEventListener("click", confirmExportConfig);
+  if (els.btnSettingsExport) {
+    els.btnSettingsExport.addEventListener("click", () => {
+      const id = els.settingsExportSelect.value;
+      if (!id) { toast("Nothing approved yet.", "error"); return; }
+      openExportConfig("export", id, false);
+    });
+  }
   if (els.exportConfigModal) {
     els.exportConfigModal.addEventListener("click", (e) => {
       if (e.target === els.exportConfigModal) closeExportConfig();
@@ -1828,7 +1980,7 @@
   els.btnApproveAll.addEventListener("click", () => {
     for (const c of allClips()) c.status = "approved";
     dirty = true;
-    renderCandidates();
+    renderReview();
   });
 
   els.btnSaveReview.addEventListener("click", async () => {
@@ -1846,6 +1998,8 @@
       updateReviewHint();
       toast("Decisions saved.", "ok");
       await refreshCampaignData();
+      // Seamless flow: review -> settings (pick style) -> export
+      go("settings");
     } catch (e) {
       toast("Save failed: " + e.message, "error");
     }
@@ -1904,13 +2058,44 @@
     }
   });
 
+  els.campBriefInput.addEventListener("change", () => {
+    const file = els.campBriefInput.files[0];
+    els.briefAttach.classList.toggle("has", !!file);
+    els.briefAttachLabel.textContent = file ? file.name : "＋ Brief";
+    els.briefAttach.title = file
+      ? file.name + " — attached to the new campaign"
+      : "Attach the creator brief (pdf · docx · txt · md)";
+  });
+
+  async function uploadBriefFile(campaignId, file) {
+    const fd = new FormData();
+    fd.append("file", file);
+    toast("Condensing brief…");
+    const r = await fetch("/api/campaigns/" + encodeURIComponent(campaignId) + "/rules", {
+      method: "POST", body: fd,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || r.status);
+    return data;
+  }
+
   els.newCampaignForm.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const name = els.campName.value.trim();
     if (!name) return;
+    const briefFile = els.campBriefInput.files[0];
     try {
       const camp = await apiPost("/api/campaigns", { name });
+      if (briefFile) {
+        try {
+          await uploadBriefFile(camp.id, briefFile);
+        } catch (e) {
+          toast("Brief could not be attached: " + e.message, "error");
+        }
+      }
       els.newCampaignForm.reset();
+      els.briefAttach.classList.remove("has");
+      els.briefAttachLabel.textContent = "＋ Brief";
       await loadCampaigns();
       toast("Campaign created.", "ok");
       go("overview", camp.id);
@@ -1918,8 +2103,6 @@
       toast("Could not create campaign: " + e.message, "error");
     }
   });
-
-  els.btnAddSources.addEventListener("click", () => go("sources"));
 
   els.bellBtn.addEventListener("click", (ev) => {
     ev.stopPropagation();
@@ -1934,7 +2117,35 @@
     notifications = [];
     renderNotifications();
   });
-  els.btnEmailCheck.addEventListener("click", () => checkInboxNow());
+  if (els.transcriptFind) {
+    els.transcriptFind.addEventListener("click", () => {
+      if (!transcriptModalVideoId) return;
+      const videoId = transcriptModalVideoId;
+      closeTranscriptModal();
+      startRun("select", videoId, false, { local: true });
+    });
+  }
+  if (els.transcriptCopy) {
+    els.transcriptCopy.addEventListener("click", async () => {
+      const body = els.transcriptBody.textContent || "";
+      if (!body || body === "Loading…" || body === "No transcript available.") {
+        toast("Nothing to copy yet.", "error");
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(body);
+        toast("Transcript copied.", "ok");
+      } catch (e) {
+        const ta = document.createElement("textarea");
+        ta.value = body;
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); toast("Transcript copied.", "ok"); }
+        catch (err) { toast("Copy failed: " + err.message, "error"); }
+        document.body.removeChild(ta);
+      }
+    });
+  }
   els.transcriptClose.addEventListener("click", closeTranscriptModal);
   els.transcriptModal.addEventListener("click", (ev) => {
     if (ev.target === els.transcriptModal) closeTranscriptModal();
@@ -1943,27 +2154,47 @@
     if (ev.key === "Escape" && !els.transcriptModal.hidden) closeTranscriptModal();
   });
 
+  if (els.rulesInput) {
   els.rulesInput.addEventListener("change", async () => {
     const file = els.rulesInput.files[0];
     if (!file || !currentCampaignId) return;
-    const fd = new FormData();
-    fd.append("file", file);
     try {
-      toast("Condensing brief…");
-      const r = await fetch("/api/campaigns/" + encodeURIComponent(currentCampaignId) + "/rules", {
-        method: "POST", body: fd,
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data.error || r.status);
+      const data = await uploadBriefFile(currentCampaignId, file);
       currentCampaign = await apiGet("/api/campaigns/" + encodeURIComponent(currentCampaignId));
       renderRules();
-      toast("Brief condensed.", "ok");
+      if (data.warning) {
+        toast(data.warning, "error");
+      } else {
+        toast("Brief condensed.", "ok");
+      }
     } catch (e) {
       toast("Rules upload failed: " + e.message, "error");
     } finally {
       els.rulesInput.value = "";
     }
   });
+  }
+
+  if (els.ovRulesInput) {
+    els.ovRulesInput.addEventListener("change", async () => {
+      const file = els.ovRulesInput.files[0];
+      if (!file || !currentCampaignId) return;
+      try {
+        const data = await uploadBriefFile(currentCampaignId, file);
+        currentCampaign = await apiGet("/api/campaigns/" + encodeURIComponent(currentCampaignId));
+        renderOverviewRules();
+        if (data.warning) {
+          toast(data.warning, "error");
+        } else {
+          toast("Brief condensed.", "ok");
+        }
+      } catch (e) {
+        toast("Brief upload failed: " + e.message, "error");
+      } finally {
+        els.ovRulesInput.value = "";
+      }
+    });
+  }
 
   async function loadMusic() {
     try {

@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClipForge — System Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300;12..96,500;12..96,700;12..96,800&family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #14110E;
+    --coal: #1B1714;
+    --panel: #241F1A;
+    --line: #383028;
+    --line-soft: #2C2620;
+    --bone: #F1E9DC;
+    --dust: #A39888;
+    --faint: #77695C;
+    --cad: #FF5C1A;
+    --cad-soft: rgba(255, 92, 26, 0.13);
+    --phos: #D4F06E;
+    --amber: #E0A24A;
+    --rec: #E23A43;
+    --disp: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+    --body: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--bone);
+    font-family: var(--body);
+    font-size: 15.5px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--cad); color: var(--ink); }
+  a { color: inherit; }
+  code, .k { font-family: var(--mono); }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
+
+  /* ---------- masthead ---------- */
+  .masthead { border-bottom: 1px solid var(--line); }
+  .masthead .wrap {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 16px; padding-top: 20px; padding-bottom: 20px; flex-wrap: wrap;
+  }
+  .brand { font-family: var(--disp); font-weight: 800; font-size: 20px; letter-spacing: 0.02em; display: flex; align-items: center; gap: 12px; }
+  .rec-dot { width: 11px; height: 11px; border-radius: 50%; background: var(--rec); box-shadow: 0 0 0 4px rgba(226,58,67,0.18); animation: pulse 2.4s ease-in-out infinite; flex: none; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .mast-meta { font-family: var(--mono); font-size: 11.5px; color: var(--dust); letter-spacing: 0.04em; }
+  .mast-meta b { color: var(--bone); font-weight: 500; }
+
+  /* ---------- hero: the pipeline ---------- */
+  .hero { padding: 72px 0 56px; position: relative; overflow: hidden; }
+  .hero::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background-image: repeating-linear-gradient(90deg, var(--line-soft) 0 1px, transparent 1px 48px);
+    mask-image: linear-gradient(180deg, transparent, #000 30%, transparent 95%);
+    opacity: 0.5;
+  }
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--cad); margin: 0 0 18px; }
+  .hero h1 {
+    font-family: var(--disp); font-weight: 800; margin: 0 0 20px;
+    font-size: clamp(40px, 6.4vw, 68px); line-height: 1.02; letter-spacing: -0.015em;
+    max-width: 16ch;
+  }
+  .hero h1 em { font-style: normal; color: var(--cad); }
+  .hero-sub { max-width: 58ch; color: var(--dust); font-size: 17px; margin: 0 0 44px; }
+  .hero-sub b { color: var(--bone); font-weight: 500; }
+
+  /* scrubber */
+  .scrub { position: relative; border: 1px solid var(--line); background: var(--coal); border-radius: 10px; padding: 20px 20px 16px; }
+  .scrub-head { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em; color: var(--faint); text-transform: uppercase; margin-bottom: 14px; }
+  .track { display: flex; gap: 6px; position: relative; }
+  .chip {
+    flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--panel);
+    color: var(--dust); font-family: var(--mono); font-size: 11px; text-align: left;
+    padding: 14px 10px 12px; border-radius: 7px; cursor: pointer; position: relative;
+    transition: border-color .18s, color .18s, background .18s;
+  }
+  .chip .num { display: block; font-size: 9.5px; color: var(--faint); margin-bottom: 7px; letter-spacing: 0.12em; }
+  .chip:hover { border-color: var(--faint); color: var(--bone); }
+  .chip.on::after {
+    content: ""; position: absolute; left: 10px; right: 10px; bottom: -9px; height: 2px;
+    background: currentColor; box-shadow: 0 0 8px currentColor;
+  }
+  /* stage categories: rec = capture/whisper · llm = model pass · mail = email loop · vid = ffmpeg/render */
+  .chip.c-rec { --acc: var(--rec); }
+  .chip.c-llm { --acc: var(--phos); }
+  .chip.c-mail { --acc: var(--amber); }
+  .chip.c-vid { --acc: var(--cad); }
+  .chip.on { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 12%, var(--panel)); color: var(--acc); }
+  .chip.on .num { color: var(--acc); }
+  .readout-title { color: var(--roAcc, var(--cad)); }
+  .chip:focus-visible { outline: 2px solid var(--cad); outline-offset: 2px; }
+  .readout { margin-top: 24px; min-height: 96px; border-top: 1px dashed var(--line); padding-top: 16px; display: grid; grid-template-columns: 200px 1fr; gap: 20px; }
+  .readout-title { font-family: var(--disp); font-weight: 700; font-size: 22px; align-self: start; }
+  .readout-body { color: var(--dust); font-size: 14.5px; }
+  .readout-body code { color: var(--bone); background: var(--panel); border: 1px solid var(--line-soft); border-radius: 4px; padding: 1px 6px; font-size: 12.5px; }
+  .tc { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 12px; }
+
+  /* ---------- sections ---------- */
+  section { padding: 76px 0 8px; }
+  .sec-head { display: flex; align-items: baseline; gap: 18px; border-bottom: 1px solid var(--line); padding-bottom: 14px; margin-bottom: 34px; flex-wrap: wrap; }
+  .sec-head .tag { font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em; color: var(--cad); flex: none; }
+  .sec-head h2 { font-family: var(--disp); font-weight: 700; font-size: clamp(26px, 3.6vw, 36px); margin: 0; letter-spacing: -0.01em; }
+  .sec-head .note { margin-left: auto; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+
+  .lead { color: var(--dust); max-width: 64ch; margin: 0 0 30px; }
+  .lead b { color: var(--bone); font-weight: 500; }
+
+  /* generic card grid */
+  .grid { display: grid; gap: 14px; }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  .g2 { grid-template-columns: repeat(2, 1fr); }
+  .card {
+    border: 1px solid var(--line); background: var(--coal); border-radius: 9px;
+    padding: 20px 20px 18px; position: relative;
+  }
+  .card h3 { font-family: var(--disp); font-weight: 700; font-size: 17px; margin: 0 0 4px; }
+  .card .sub { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); margin: 0 0 12px; }
+  .card p { margin: 0; color: var(--dust); font-size: 14px; }
+  .card p code { color: var(--bone); font-size: 12px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 4px; padding: 0 5px; }
+  .card .flag { position: absolute; top: 14px; right: 14px; font-family: var(--mono); font-size: 10px; padding: 3px 8px; border-radius: 20px; letter-spacing: 0.08em; }
+  .flag.cli { background: rgba(224,162,74,0.14); color: var(--amber); }
+  .flag.web { background: rgba(212,240,110,0.1); color: var(--phos); }
+  .flag.both { background: var(--cad-soft); color: var(--cad); }
+
+  /* workflow: vertical flow */
+  .flow { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; counter-reset: step; }
+  .flow li { counter-increment: step; display: grid; grid-template-columns: 64px 1fr; gap: 20px; padding: 22px 0; border-top: 1px dashed var(--line); }
+  .flow li:first-child { border-top: 0; }
+  .flow .ix { font-family: var(--mono); font-size: 11px; color: var(--cad); letter-spacing: 0.1em; padding-top: 5px; }
+  .flow .ix::before { content: "S" counter(step, decimal-leading-zero); }
+  .flow h4 { font-family: var(--disp); font-weight: 700; font-size: 18px; margin: 0 0 6px; }
+  .flow p { margin: 0 0 8px; color: var(--dust); font-size: 14.5px; max-width: 72ch; }
+  .flow .files { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+  .flow .files code { color: var(--dust); }
+  .flow .pill { display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; padding: 2px 8px; border-radius: 3px; margin-right: 8px; }
+  .p-rec { background: rgba(226,58,67,0.14); color: var(--rec); }
+  .p-mail { background: rgba(224,162,74,0.14); color: var(--amber); }
+  .p-llm { background: rgba(212,240,110,0.1); color: var(--phos); }
+  .p-vid { background: var(--cad-soft); color: var(--cad); }
+
+  /* page map — edit bay rail */
+  .railgrid { display: grid; grid-template-columns: 210px 1fr; gap: 22px; align-items: start; }
+  .rail { border: 1px solid var(--line); border-radius: 9px; background: var(--coal); overflow: hidden; position: sticky; top: 24px; }
+  .rail a { display: block; padding: 13px 18px; border-bottom: 1px solid var(--line-soft); font-family: var(--mono); font-size: 12px; color: var(--dust); text-decoration: none; border-left: 3px solid transparent; transition: all .15s; }
+  .rail a:hover { color: var(--bone); background: var(--panel); }
+  .rail a.on { color: var(--cad); border-left-color: var(--cad); background: var(--cad-soft); }
+  .pagedesc { border: 1px solid var(--line); border-radius: 9px; background: var(--panel); padding: 26px 26px 22px; min-height: 300px; }
+  .pagedesc .crumb { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.16em; color: var(--faint); text-transform: uppercase; margin-bottom: 10px; }
+  .pagedesc h4 { font-family: var(--disp); font-weight: 700; font-size: 24px; margin: 0 0 12px; }
+  .pagedesc p { color: var(--dust); margin: 0 0 14px; font-size: 14.5px; }
+  .pagedesc ul { margin: 0; padding-left: 18px; color: var(--dust); font-size: 14px; }
+  .pagedesc li { margin-bottom: 6px; }
+  .pagedesc li b { color: var(--bone); font-weight: 500; }
+
+  /* telegram event table */
+  table.events { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.events th { text-align: left; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); font-weight: 500; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  table.events td { padding: 11px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  table.events tr:hover td { background: var(--panel); }
+  table.events td.ev { font-family: var(--mono); font-size: 12.5px; color: var(--phos); white-space: nowrap; }
+  table.events td.emo { width: 34px; }
+  table.events td.src { font-family: var(--mono); font-size: 11px; color: var(--faint); white-space: nowrap; }
+
+  /* commands two-column */
+  .cmds { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .cmd-card { border: 1px solid var(--line); border-radius: 9px; background: var(--coal); padding: 16px 18px; }
+  .cmd-card h5 { margin: 0 0 2px; font-family: var(--mono); font-size: 13px; color: var(--cad); font-weight: 500; }
+  .cmd-card p { margin: 0; color: var(--dust); font-size: 13px; }
+  .cmd-card p code { color: var(--bone); font-size: 12px; }
+
+  /* modules / guarantees */
+  .modules { columns: 2; column-gap: 26px; list-style: none; margin: 0; padding: 0; }
+  .modules li { break-inside: avoid; padding: 11px 0; border-bottom: 1px solid var(--line-soft); font-size: 14px; }
+  .modules li code { color: var(--cad); background: none; border: none; padding: 0; font-size: 12.5px; margin-right: 10px; }
+  .modules li span { color: var(--dust); }
+
+  .guarantee { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .g-item { border-left: 2px solid var(--cad); padding: 4px 0 4px 18px; }
+  .g-item h5 { font-family: var(--disp); font-weight: 700; margin: 0 0 5px; font-size: 15.5px; }
+  .g-item p { margin: 0; color: var(--dust); font-size: 13.5px; }
+
+  /* footer */
+  footer { margin-top: 90px; border-top: 1px solid var(--line); padding: 26px 0 40px; }
+  footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: 0.05em; }
+
+  /* reveal on scroll */
+  .rev { opacity: 0; transform: translateY(14px); transition: opacity .5s ease, transform .5s ease; }
+  .rev.in { opacity: 1; transform: none; }
+
+  @media (max-width: 860px) {
+    .g3 { grid-template-columns: 1fr 1fr; }
+    .railgrid { grid-template-columns: 1fr; }
+    .rail { position: static; }
+    .modules { columns: 1; }
+    .readout { grid-template-columns: 1fr; gap: 8px; }
+  }
+  @media (max-width: 620px) {
+    .g3, .g2, .cmds, .guarantee { grid-template-columns: 1fr; }
+    .track { flex-wrap: wrap; }
+    .chip { flex: 1 1 30%; }
+    .flow li { grid-template-columns: 1fr; gap: 6px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .rec-dot { animation: none; }
+    .rev { opacity: 1; transform: none; transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <div class="brand"><span class="rec-dot" aria-hidden="true"></span>CLIPFORGE</div>
+    <div class="mast-meta">SYSTEM MAP · <b>V1</b> · WINDOWS / PYTHON 3.12 · <b>LOCAL AI</b></div>
+  </div>
+</header>
+
+<!-- ============ HERO ============ -->
+<div class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Long video in → post-ready vertical clips out</p>
+    <h1>An <em>auto-clipper</em> that cuts interviews the way an editor would.</h1>
+    <p class="hero-sub">ClipForge transcribes a long-form video, finds the moments worth posting,
+      and renders finished 9:16 clips — hook, captions, music and b-roll included — with every
+      stage running <b>locally</b>: faster-whisper, Ollama, ffmpeg. No cloud, no API bill.</p>
+
+    <div class="scrub">
+      <div class="scrub-head"><span>PIPELINE · SCRUB THE STAGES</span><span id="tcOut">TC 00:00:00</span></div>
+      <div class="track" role="tablist" aria-label="Pipeline stages" id="track"></div>
+      <div class="readout">
+        <div class="readout-title" id="roTitle"></div>
+        <div class="readout-body" id="roBody"></div>
+      </div>
+      <div class="tc" id="roFiles"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 01 WORKFLOW ============ -->
+<section id="workflow">
+  <div class="wrap">
+    <div class="sec-head rev">
+      <span class="tag">01</span><h2>How one video becomes clips</h2>
+      <span class="note">source → highlights → review → export</span>
+    </div>
+    <p class="lead rev">The default flow runs highlight selection over <b>email</b> instead of the local
+    model: the transcript goes out, an AI replies with a JSON pick-list, and the reply is ingested
+    automatically. Switch any campaign to local Ollama highlighting in Settings.</p>
+
+    <ol class="flow">
+      <li class="rev">
+        <div class="ix"></div>
+        <div>
+          <h4>Upload the source</h4>
+          <p>Drop a long-form interview into a campaign via the web UI (or the <code>input/</code> folder).
+          Each campaign is a self-contained bay with its own inputs, transcripts, candidates and outputs.</p>
+          <div class="files"><span class="pill p-vid">video</span><code>server.py api_upload</code> · <code>src/campaigns.py</code></div>
+        </div>
+      </li>
+      <li class="rev">
+        <div class="ix"></div>
+        <div>
+          <h4>Transcribe &amp; clean</h4>
+          <p>faster-whisper with a pinned language and a vocabulary-biasing prompt (“gym”, “discipline”,
+          “alhamdulillah”…) cuts mishearings. A second LLM pass fixes low-confidence words using
+          Whisper’s per-word probabilities.</p>
+          <div class="files"><span class="pill p-rec">whisper</span><code>src/transcribe.py</code> · <code>src/clean_transcript.py</code> · silero-vad silence trim on cuts</div>
+        </div>
+      </li>
+      <li class="rev">
+        <div class="ix"></div>
+        <div>
+          <h4>Highlights by email</h4>
+          <p>The numbered transcript is emailed to the configured address. The AI replies with a JSON
+          object — segment ids, hooks, scores, reasons (the contract sits at the top of the email).
+          A background IMAP poller ingests the reply and turns it into candidates; only mail from the
+          configured sender is trusted.</p>
+          <div class="files"><span class="pill p-mail">smtp / imap</span><code>src/email_transcript.py</code> · <code>src/email_highlights.py</code> · server inbox poller every 30s</div>
+        </div>
+      </li>
+      <li class="rev">
+        <div class="ix"></div>
+        <div>
+          <h4>Review &amp; approve</h4>
+          <p>The Approval page shows each candidate with a preview: approve, reject, edit hook text or
+          timing. While the reply is in flight, a waiting card holds the slot; when highlights land,
+          the bell and Telegram both fire.</p>
+          <div class="files"><span class="pill p-web" style="background:rgba(212,240,110,.1);color:var(--phos)">web</span><code>web/app.js</code> · review candidates → approved</div>
+        </div>
+      </li>
+      <li class="rev">
+        <div class="ix"></div>
+        <div>
+          <h4>Cut, render, finish</h4>
+          <p>ffmpeg cuts each approved range with lead-in/out padding, then the template applies hook title,
+          keyword-highlighted captions, CTA, background music and emotion-matched b-roll cutaways.
+          Exports land in the campaign’s <code>output/</code>; Style Explorer winners are used automatically.</p>
+          <div class="files"><span class="pill p-vid">ffmpeg</span><code>src/cut_clips.py</code> · <code>src/apply_template.py</code></div>
+        </div>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<!-- ============ 02 WEB APP ============ -->
+<section id="webapp">
+  <div class="wrap">
+    <div class="sec-head rev">
+      <span class="tag">02</span><h2>The web app</h2>
+      <span class="note">http://localhost:8600 · start_clipforge.bat</span>
+    </div>
+    <div class="railgrid rev">
+      <nav class="rail" id="rail" aria-label="Web app pages">
+        <a href="#webapp" data-page="campaigns" class="on">Campaigns</a>
+        <a href="#webapp" data-page="overview">Overview</a>
+        <a href="#webapp" data-page="sources">Sources</a>
+        <a href="#webapp" data-page="approval">Approval</a>
+        <a href="#webapp" data-page="candidates">Candidates</a>
+        <a href="#webapp" data-page="approved">Approved</a>
+        <a href="#webapp" data-page="exports">Exports</a>
+        <a href="#webapp" data-page="stylelab">Style Lab</a>
+        <a href="#webapp" data-page="settings">Settings</a>
+      </nav>
+      <div class="pagedesc" id="pageDesc"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 03 STYLE SYSTEM ============ -->
+<section id="style">
+  <div class="wrap">
+    <div class="sec-head rev">
+      <span class="tag">03</span><h2>Style System</h2>
+      <span class="note">templates · Style Lab · Style Explorer</span>
+    </div>
+    <div class="grid g3 rev">
+      <div class="card">
+        <span class="flag both">cli + web</span>
+        <h3>Templates</h3>
+        <p class="sub">json render recipes</p>
+        <p>House styles like <code>square_captioned</code> and <code>full_screen</code>: band geometry,
+        fonts, caption style, hook placement, CTA block, music and b-roll mode, color grade and vignette.
+        Export with <code>--template name</code>.</p>
+      </div>
+      <div class="card">
+        <span class="flag cli">cli</span>
+        <h3>Style Lab</h3>
+        <p class="sub">clone a style from references</p>
+        <p><code>frames</code> extracts stills (uniform or scene-change sampling, contact sheets),
+        <code>style</code> runs pixel analysis over them and drafts a template: band geometry,
+        hook/caption/CTA colors, keyword highlight detection.</p>
+      </div>
+      <div class="card">
+        <span class="flag both">cli + web</span>
+        <h3>Style Explorer</h3>
+        <p class="sub">auto-judge with a vision llm</p>
+        <p>Generates N seeded style variants on the best clip (crop, fonts, captions, grade, music…),
+        renders low-res previews, scores them with <code>qwen2.5vl</code> on legibility/contrast/style/brief-fit,
+        and saves the winner — used automatically on the next export.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 04 TELEGRAM ============ -->
+<section id="telegram">
+  <div class="wrap">
+    <div class="sec-head rev">
+      <span class="tag">04</span><h2>Notifications</h2>
+      <span class="note">web bell · desktop · telegram</span>
+    </div>
+    <p class="lead rev">Every meaningful event is published once on the internal bus and fanned out:
+    the web bell collects it (with desktop notifications), and <b>Telegram</b> mirrors it to your chat
+    over the Bot API via plain urllib — a daemon thread, a bounded queue, zero blocking, zero new
+    dependencies. Secrets live only in <b>.env</b>.</p>
+
+    <div class="grid g3 rev" style="margin-bottom: 22px;">
+      <div class="card">
+        <h3>Setup</h3>
+        <p class="sub">three commands</p>
+        <p><code>telegram-setup</code> lists recent chats with their chat id after you message the bot;
+        paste it into <code>TELEGRAM_CHAT_ID</code>. <code>telegram-test</code> confirms delivery.
+        Master toggle: <code>telegram.enabled</code> in config.json.</p>
+      </div>
+      <div class="card">
+        <h3>Delivery guarantees</h3>
+        <p class="sub">never breaks the bus</p>
+        <p>Non-blocking queue + daemon worker. Missing token/chat id degrades to one warning, never a
+        crash. Send failures swallowed with a single log line. All user text HTML-escaped; the token
+        never appears in logs, API responses or the UI.</p>
+      </div>
+      <div class="card">
+        <h3>Status surface</h3>
+        <p class="sub">in the app</p>
+        <p><code>/api/state</code> exposes <code>telegram: {enabled, configured}</code>; Settings shows
+        “Telegram: configured / not configured” with no secrets rendered anywhere.</p>
+      </div>
+    </div>
+
+    <div class="card rev" style="padding: 6px 8px 2px;">
+      <table class="events">
+        <thead><tr><th>event</th><th></th><th>what it means</th><th>emitted by</th></tr></thead>
+        <tbody>
+          <tr><td class="ev">run_started</td><td class="emo">⏳</td><td>a web run began — mode + video</td><td class="src">server.py</td></tr>
+          <tr><td class="ev">run_ok</td><td class="emo">✅</td><td>run finished; shows winning style when an exploration exists</td><td class="src">server.py</td></tr>
+          <tr><td class="ev">run_error</td><td class="emo">❌</td><td>run failed — error tail (≤300 chars) + video</td><td class="src">server.py</td></tr>
+          <tr><td class="ev">run_cancelled</td><td class="emo">⏹</td><td>run cancelled by the user</td><td class="src">server.py</td></tr>
+          <tr><td class="ev">transcript_sent</td><td class="emo">💬</td><td>transcript emailed to recipients</td><td class="src">email_transcript.py</td></tr>
+          <tr><td class="ev">awaiting_highlights</td><td class="emo">💬</td><td>waiting for the AI highlight reply</td><td class="src">main.py</td></tr>
+          <tr><td class="ev">highlights_received</td><td class="emo">💬</td><td>highlight reply ingested — clip count</td><td class="src">inbox poller</td></tr>
+          <tr><td class="ev">export_done</td><td class="emo">🎬</td><td>export finished — clip count + names (≤5 shown)</td><td class="src">main.py</td></tr>
+          <tr><td class="ev">explore_done</td><td class="emo">🎨</td><td>style exploration finished — winner + score</td><td class="src">main.py</td></tr>
+          <tr><td class="ev">upload_done</td><td class="emo">⬆</td><td>source video uploaded — name + size</td><td class="src">server.py</td></tr>
+          <tr><td class="ev">campaign_created</td><td class="emo">📁</td><td>campaign created — name + id</td><td class="src">server.py</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 05 CLI ============ -->
+<section id="cli">
+  <div class="wrap">
+    <div class="sec-head rev">
+      <span class="tag">05</span><h2>CLI commands</h2>
+      <span class="note">python main.py &lt;command&gt; · global flags: --campaign &lt;id&gt; --emit-progress</span>
+    </div>
+    <div class="cmds rev">
+      <div class="cmd-card"><h5>analyze</h5><p>transcribe → context → select; produces candidates for review.</p></div>
+      <div class="cmd-card"><h5>export</h5><p>cut + render approved clips. <code>--template</code>, <code>--auto</code>, <code>--instructions "…"</code>.</p></div>
+      <div class="cmd-card"><h5>pipeline</h5><p>full auto run (analyze + cut + render), review skipped.</p></div>
+      <div class="cmd-card"><h5>transcribe · clean · context</h5><p>single stages of the analysis chain.</p></div>
+      <div class="cmd-card"><h5>select</h5><p>LLM highlight selection. <code>--email</code> forces the email flow; <code>--no-local-highlights</code> in analyze/pipeline does the same.</p></div>
+      <div class="cmd-card"><h5>cut · render</h5><p>cutting and template stages in isolation.</p></div>
+      <div class="cmd-card"><h5>frames</h5><p>extract stills: <code>--mode scene|uniform</code>, contact-sheet <code>--grid 3x4</code>.</p></div>
+      <div class="cmd-card"><h5>style</h5><p>pixel analysis → style report + draft template in <code>templates/</code>.</p></div>
+      <div class="cmd-card"><h5>explore-style</h5><p>render N style variants on the best clip, vision-LLM picks the winner. <code>--brief</code>, <code>--variants</code>, <code>--probe N</code>.</p></div>
+      <div class="cmd-card"><h5>check-email</h5><p>poll the inbox for AI highlight replies right now.</p></div>
+      <div class="cmd-card"><h5>batch</h5><p>process a whole folder of videos.</p></div>
+      <div class="cmd-card"><h5>telegram-setup · telegram-test</h5><p>find your chat id · verify Telegram delivery.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 06 ARCHITECTURE ============ -->
+<section id="arch">
+  <div class="wrap">
+    <div class="sec-head rev">
+      <span class="tag">06</span><h2>Architecture</h2>
+      <span class="note">starlette backend · one event bus · module per stage</span>
+    </div>
+    <p class="lead rev">Runs are subprocesses (<code>main.py --emit-progress</code>): the server streams
+    their stdout, parses <b>@@PROGRESS@@</b> lines for the progress bar and republishes <b>@@EVENT@@</b>
+    lines onto the bus. The bus feeds <code>/api/events</code> (long-poll) → bell, and the Telegram sink.
+    Lifecycle events live server-side; outcome events with richer data come from the CLI and are
+    republished — one notification per outcome, never both.</p>
+    <ul class="modules rev">
+      <li><code>main.py</code><span>CLI orchestrator — all pipeline commands</span></li>
+      <li><code>server.py</code><span>Starlette backend — runs, API, event bus, inbox poller</span></li>
+      <li><code>src/config.py</code><span>config.json + .env → one typed config object</span></li>
+      <li><code>src/transcribe.py</code><span>faster-whisper + VAD-assisted boundaries</span></li>
+      <li><code>src/clean_transcript.py</code><span>LLM fix of low-confidence words</span></li>
+      <li><code>src/select_highlights.py</code><span>Ollama highlight scoring + rules</span></li>
+      <li><code>src/email_transcript.py / email_highlights.py</code><span>SMTP out, IMAP ingest</span></li>
+      <li><code>src/cut_clips.py</code><span>ffmpeg cutting with silence-aware padding</span></li>
+      <li><code>src/apply_template.py</code><span>ASS captions, hook, music, b-roll graph</span></li>
+      <li><code>src/style_explorer.py</code><span>variant generation + vision judging</span></li>
+      <li><code>src/notify.py</code><span>Telegram sink — queue, daemon thread, formatters</span></li>
+      <li><code>src/campaigns.py</code><span>multi-show campaign folders</span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ 07 GUARANTEES ============ -->
+<section id="guarantees">
+  <div class="wrap">
+    <div class="sec-head rev">
+      <span class="tag">07</span><h2>Design rules the system enforces</h2>
+    </div>
+    <div class="guarantee rev">
+      <div class="g-item"><h5>Local-only</h5><p>Whisper, Ollama and ffmpeg on your machine. The only network calls are SMTP/IMAP, stock b-roll APIs (optional) and Telegram.</p></div>
+      <div class="g-item"><h5>Non-blocking notifications</h5><p>The event bus never waits on Telegram; delivery rides a bounded queue and one daemon thread.</p></div>
+      <div class="g-item"><h5>Secrets in .env only</h5><p>Tokens and chat ids are gitignored, never logged, never rendered, never returned by any API.</p></div>
+      <div class="g-item"><h5>One notification per outcome</h5><p>Server emits lifecycle events; the CLI emits richer outcome events — never duplicates.</p></div>
+      <div class="g-item"><h5>Graceful degradation</h5><p>Missing config → one warning. Failed send → one log line. Everything else keeps running.</p></div>
+      <div class="g-item"><h5>Determinism</h5><p>Style variants are seeded per video; the same input gives the same explorations.</p></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>CLIPFORGE — SYSTEM MAP · generated for the project owner</span>
+    <span>main.py · server.py · src/ · web/ · config.json · .env</span>
+  </div>
+</footer>
+
+<script>
+  // ---------- hero scrubber ---------- //
+  const STAGES = [
+    { t: "Transcribe", c: "rec", b: "faster-whisper with a pinned language and a vocabulary-biasing prompt tuned to your channel's words. Silero-VAD tightens clip boundaries around silence.", f: "src/transcribe.py · whisper large-v3 · silero-vad", tc: 8 },
+    { t: "Clean", c: "llm", b: "An LLM pass fixes words Whisper was unsure about, using per-word probabilities — “jym” becomes “gym” without touching confident speech.", f: "src/clean_transcript.py · ollama", tc: 16 },
+    { t: "Context", c: "llm", b: "Per-video context (topic, tone, structure) is built so highlight selection understands the whole interview, not isolated quotes.", f: "src/build_context.py", tc: 24 },
+    { t: "Select", c: "mail", b: "Highlights chosen by segment id against your brief — by email (AI reply ingested via IMAP) or locally with Ollama, per campaign.", f: "src/select_highlights.py · src/email_highlights.py", tc: 40 },
+    { t: "Review", c: "mail", b: "Approve, reject, or rewrite each candidate's hook and timing on the Candidates / Approval pages. Previews play inline.", f: "web/app.js · approval + candidates", tc: 55 },
+    { t: "Cut", c: "vid", b: "ffmpeg cuts each approved range with configurable lead-in/out padding and silence-aware boundaries.", f: "src/cut_clips.py", tc: 68 },
+    { t: "Render", c: "vid", b: "The template applies hook, keyword-highlighted captions, CTA, background music and emotion-matched b-roll into finished 9:16 clips.", f: "src/apply_template.py", tc: 84 },
+    { t: "Ship", c: "vid", b: "Exports land in the campaign output folder and notifications fire — web bell, desktop, and Telegram.", f: "src/notify.py · server.py", tc: 100 },
+  ];
+  const ACC = { rec: "var(--rec)", llm: "var(--phos)", mail: "var(--amber)", vid: "var(--cad)" };
+  const track = document.getElementById("track");
+  const roTitle = document.getElementById("roTitle");
+  const roBody = document.getElementById("roBody");
+  const roFiles = document.getElementById("roFiles");
+  const tcOut = document.getElementById("tcOut");
+  function setStage(i, focusChip) {
+    const s = STAGES[i];
+    roTitle.textContent = s.t;
+    roBody.textContent = s.b;
+    roFiles.textContent = s.f;
+    document.querySelector(".readout").style.setProperty("--roAcc", ACC[s.c]);
+    const sec = Math.round(s.tc * 3.7);
+    tcOut.textContent = "TC 00:" + String(Math.floor(sec / 60)).padStart(2, "0") + ":" + String(sec % 60).padStart(2, "0");
+    document.querySelectorAll(".chip").forEach((c, j) =>
+      c.classList.toggle("on", j === i));
+  }
+  STAGES.forEach((s, i) => {
+    const b = document.createElement("button");
+    b.className = "chip c-" + s.c; b.type = "button";
+    b.setAttribute("role", "tab");
+    b.innerHTML = "<span class='num'>" + String(i + 1).padStart(2, "0") + "</span>" + s.t;
+    b.addEventListener("mouseenter", () => setStage(i));
+    b.addEventListener("focus", () => setStage(i));
+    b.addEventListener("click", () => setStage(i));
+    track.appendChild(b);
+  });
+  setStage(0);
+  (function autoCycle() {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let i = 0;
+    setInterval(() => {
+      if (document.querySelector(".scrub:hover")) return;
+      i = (i + 1) % STAGES.length;
+      setStage(i);
+    }, 2600);
+  })();
+
+  // ---------- page rail ---------- //
+  const PAGES = {
+    campaigns: { n: "Campaigns", c: "Dashboard", d: "A bay for each show you cut.",
+      l: [["Create a campaign", "name it, get an isolated folder tree: input, transcripts, candidates, exports"],
+          ["Per-campaign everything", "settings, rules, brief, templates and highlights all scoped to the campaign"],
+          ["Live cards", "videos, stages and pending counts at a glance"]] },
+    overview: { n: "Overview", c: "Campaign", d: "The campaign's control room.",
+      l: [["Pipeline status", "where each source video sits in the flow: awaiting, reviewing, exported"],
+          ["Quick actions", "check the inbox now, open input/output folders"],
+          ["Detail meta", "template, highlight source, brief and instructions"]] },
+    sources: { n: "Sources", c: "Campaign", d: "Long-form interviews for this campaign.",
+      l: [["Upload by drag & drop", "progress streamed to the run bar"],
+          ["Run any mode per video", "analyze, export, pipeline, frames, style, explore-style"],
+          ["Delete safely", "refused while a run is active"]] },
+    approval: { n: "Approval", c: "Campaign", d: "The heart of the app — where highlights become clips.",
+      l: [["Waiting cards", "a live state while the transcript email is out and the reply is in flight"],
+          ["Highlight cards", "preview, approve/reject, edit hook text and start/end"],
+          ["Start clipping", "one button runs export on everything approved"],
+          ["Check inbox now", "forces an immediate IMAP poll"]] },
+    candidates: { n: "Candidates", c: "Campaign", d: "Everything the selection stage produced.",
+      l: [["Scores and reasons", "the model's case for each clip"],
+          ["Bulk tools", "approve by score threshold with --auto semantics"],
+          ["Email-mode placeholder", "created immediately so the page never shows a dead end"]] },
+    approved: { n: "Approved", c: "Campaign", d: "Clips cleared for cutting.",
+      l: [["Final timings", "lead-in/out padding shown on every clip"],
+          ["Hook copy", "editable right up to export"],
+          ["Ready state", "what the next export will render"]] },
+    exports: { n: "Exports", c: "Campaign", d: "Cutting and rendering, with style control up front.",
+      l: [["Pre-export config modal", "pick the template and per-clip edit instructions every time"],
+          ["Style Explorer winner", "pre-selected automatically when one exists"],
+          ["Explore styles", "run the variant search from here, watch live progress, keep or save the winner"]] },
+    stylelab: { n: "Style Lab", c: "Top level", d: "Turn edits you like into reusable templates.",
+      l: [["Extract frames", "uniform or scene-change sampling with contact sheets"],
+          ["Analyze → draft template", "band geometry, hook/caption/CTA positions and colors"],
+          ["Style Explorer brief", "free-text direction that steers variants and the judge"]] },
+    settings: { n: "Settings", c: "Campaign", d: "Every knob, scoped to the campaign.",
+      l: [["Highlight source", "local Ollama toggle overrides the global email flow"],
+          ["Min score / max clips", "selection thresholds"],
+          ["Music", "pick a track from music/ and set volume"],
+          ["Default template", "plus Telegram status: configured or not — no secrets shown"]] },
+  };
+  const rail = document.getElementById("rail");
+  const pageDesc = document.getElementById("pageDesc");
+  function setPage(key) {
+    const p = PAGES[key];
+    rail.querySelectorAll("a").forEach(a => a.classList.toggle("on", a.dataset.page === key));
+    pageDesc.innerHTML =
+      "<div class='crumb'>" + p.c + " page</div>" +
+      "<h4>" + p.n + "</h4><p>" + p.d + "</p><ul>" +
+      p.l.map(x => "<li><b>" + x[0] + "</b> — " + x[1] + "</li>").join("") + "</ul>";
+  }
+  rail.addEventListener("click", (e) => {
+    const a = e.target.closest("a");
+    if (!a) return;
+    e.preventDefault();
+    setPage(a.dataset.page);
+  });
+  setPage("campaigns");
+
+  // ---------- scroll reveal ---------- //
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach(en => { if (en.isIntersecting) { en.target.classList.add("in"); io.unobserve(en.target); } });
+  }, { threshold: 0.12 });
+  document.querySelectorAll(".rev").forEach(el => io.observe(el));
+</script>
+</body>
+</html>

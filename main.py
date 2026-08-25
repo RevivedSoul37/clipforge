@@ -195,10 +195,11 @@ def cmd_transcribe(args):
                           device=args.device, compute_type=args.compute,
                           language=args.language,
                           progress=_scaled(0, 100, "transcribe"))
-    try:
-        email_best_transcript(video, recipients_dir=config.candidates_dir)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[email] skipped: {exc}")
+    if not getattr(args, "skip_email", False):
+        try:
+            email_best_transcript(video, recipients_dir=config.candidates_dir)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[email] skipped: {exc}")
     progress.emit(100, "done", "Transcript saved")
 
 
@@ -232,16 +233,25 @@ def cmd_select(args):
     if camp:
         rules = camp.rules_summary() if camp else None
         camp_mod.add_analyzing_placeholder(camp, video.stem)
-    if getattr(args, "email", False) or not _use_local_highlights(args, camp):
+    force_local = getattr(args, "local", False)
+    if getattr(args, "email", False) or (not force_local and not _use_local_highlights(args, camp)):
         _email_await(video, camp)
         return
+    context_path = Path(args.context) if args.context else _context_path(video)
+    needed_context = not context_path.exists()
+    if needed_context:
+        print("[select] no context yet — building it from the existing transcript")
+        progress.emit(8, "context", "Building video context")
+        build_context.build_context(video, transcript_path=args.transcript)
+        progress.emit(16, "context", "Context ready")
     select_highlights.select_highlights(video,
                                         transcript_path=args.transcript,
                                         context_path=args.context,
                                         max_clips=args.max_clips,
                                         min_score=args.min_score,
                                         rules_summary=rules,
-                                        progress=_scaled(0, 100, "select"))
+                                        progress=_scaled(16 if needed_context else 0,
+                                                         100, "select"))
     _sync_reviewing(video)
 
 
@@ -540,6 +550,11 @@ def cmd_explore_style(args):
     print(f"[explore] winner template -> {winner_path}")
     progress.emit(100, "done",
                   f"Winner: {winner['name']} ({float(winner['total']):.1f})")
+    progress.event("explore_done", {
+        "video_id": video.stem,
+        "winner": winner["name"],
+        "total": float(winner["total"]),
+    })
 
 
 def cmd_analyze(args):
@@ -574,14 +589,21 @@ def cmd_export(args):
     template_name = _template_for(video, args.template)
     transcript_path = _transcript_path(video)
     total = max(1, len(results))
+    outputs = []
     for i, r in enumerate(results):
         progress.emit(45 + 55 * i / total, "render", f"Rendering clip {i + 1}/{total}")
         out = apply_template.apply_template(r["path"], transcript_path, r["start"], r["end"],
                                             template_name=template_name,
                                             hook_text=clips[i].get("hook") or None)
+        outputs.append(out)
         print(f"[export] -> {out}")
     _sync_exported(video, clips)
     progress.emit(100, "done", f"Exported {len(results)} clips")
+    progress.event("export_done", {
+        "video_id": video.stem,
+        "clip_count": len(outputs),
+        "names": [Path(o).name for o in outputs],
+    })
 
 
 def cmd_pipeline(args):
@@ -645,6 +667,88 @@ def cmd_batch(args):
             print(f"[batch] final -> {out}")
 
 
+def cmd_telegram_setup(args):
+    """List recent chats that messaged the bot so the user can copy their
+    chat id into .env (TELEGRAM_CHAT_ID). Read-only: never writes .env."""
+    from src import notify
+    token = config.telegram_bot_token
+    if not token:
+        print("TELEGRAM_BOT_TOKEN is not set in .env.")
+        print("Create a bot with @BotFather on Telegram (/newbot), paste the "
+              "token into .env, then re-run this command.")
+        return
+    try:
+        resp = notify.get_updates_sync(token)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Telegram API request failed: {exc}")
+        return
+    if not resp.get("ok"):
+        print(f"Telegram API error: {resp.get('description') or resp}")
+        return
+    updates = resp.get("result") or []
+    chats = {}
+    for u in updates:
+        msg = u.get("message") or {}
+        chat = msg.get("chat")
+        if not chat:
+            continue
+        cid = chat.get("id")
+        if cid in chats:
+            continue
+        chats[cid] = chat.get("title") or " ".join(filter(None, [
+            chat.get("first_name"), chat.get("last_name"),
+            f"@{chat.get('username')}" if chat.get("username") else "",
+        ])).strip() or "?"
+    if not chats:
+        print("No recent chats found (getUpdates was empty).")
+        print("Open your bot in Telegram, send it any message (e.g. /start), "
+              "then re-run: python main.py telegram-setup")
+        return
+    print("Recent chats that messaged the bot:")
+    for cid, title in chats.items():
+        print(f"  {title:<30} chat id: {cid}")
+    print()
+    print("Next steps:")
+    print("  1. Copy your chat id into .env as TELEGRAM_CHAT_ID=<id>")
+    print("     (group/channel ids are negative; the bot must be a member)")
+    print("  2. Verify delivery:  python main.py telegram-test")
+
+
+def cmd_telegram_test(args):
+    """Send a test message with the current config; print the API result."""
+    from src import notify
+    token = config.telegram_bot_token
+    chat = config.telegram_chat_id
+    if not config.telegram_enabled:
+        print("Telegram is disabled (telegram.enabled=false in config.json).")
+        return
+    if not token or not chat:
+        missing = []
+        if not token:
+            missing.append("TELEGRAM_BOT_TOKEN")
+        if not chat:
+            missing.append("TELEGRAM_CHAT_ID")
+        print(f"Not configured — missing in .env: {', '.join(missing)}")
+        print("Run `python main.py telegram-setup` to find your chat id.")
+        return
+    try:
+        resp = notify.send_message_sync(
+            token, chat,
+            "🔔 <b>ClipForge test</b>\n• Telegram delivery works\n"
+            f"<i>token {_mask(token)} · chat {chat}</i>")
+    except Exception as exc:  # noqa: BLE001
+        print(f"Telegram API request failed: {exc}")
+        return
+    if resp.get("ok"):
+        print("ok=true — test message delivered. Check your Telegram chat.")
+    else:
+        print(f"ok=false — {resp.get('description') or resp}")
+
+
+def _mask(token):
+    return f"{token[:6]}…" if token else ""
+
+
 def cmd_email_check(args):
     if args.emit_progress:
         progress.enable()
@@ -669,6 +773,8 @@ def main():
     p.add_argument("video")
     p.add_argument("--model"); p.add_argument("--device")
     p.add_argument("--compute"); p.add_argument("--language")
+    p.add_argument("--skip-email", action="store_true",
+                   help="local mode: skip emailing the transcript out")
     p.set_defaults(func=cmd_transcribe)
 
     p = sub.add_parser("clean", help="Fix low-confidence transcript words via LLM (Phase 1.7)")
@@ -685,6 +791,8 @@ def main():
     p.add_argument("--max-clips", type=int); p.add_argument("--min-score", type=float)
     p.add_argument("--email", action="store_true",
                    help="email mode: send transcript, wait for the AI highlight reply")
+    p.add_argument("--local", action="store_true",
+                   help="force local Ollama select even when the campaign uses email highlights")
     p.set_defaults(func=cmd_select)
 
     p = sub.add_parser("review", help="Launch Streamlit review UI (legacy)")
@@ -747,6 +855,14 @@ def main():
 
     p = sub.add_parser("check-email", help="Poll the inbox for AI highlight replies")
     p.set_defaults(func=cmd_email_check)
+
+    p = sub.add_parser("telegram-setup",
+                       help="List recent Telegram chats so you can copy your chat id into .env")
+    p.set_defaults(func=cmd_telegram_setup)
+
+    p = sub.add_parser("telegram-test",
+                       help="Send a Telegram test message using the current config")
+    p.set_defaults(func=cmd_telegram_test)
 
     p = sub.add_parser("batch", help="Process a whole folder (Phase 6)")
     p.add_argument("--template"); p.add_argument("--max-clips", type=int)
