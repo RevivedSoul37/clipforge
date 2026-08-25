@@ -4,7 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ClipForge</title>
-  <link rel="stylesheet" href="/static/style.css?v=15">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/static/style.css?v=19">
 </head>
 <body>
   <div class="app">
@@ -39,12 +42,9 @@
     <div class="workspace" id="workspace">
       <nav class="sidenav" id="sideNav" hidden>
         <a href="#/campaign" data-page="overview">Overview</a>
-        <a href="#/campaign/sources" data-page="sources">Sources</a>
-        <a href="#/campaign/approval" data-page="approval">Approval</a>
-        <a href="#/campaign/candidates" data-page="candidates">Candidates</a>
-        <a href="#/campaign/approved" data-page="approved">Approved</a>
-        <a href="#/campaign/exports" data-page="exports">Exports</a>
+        <a href="#/campaign/review" data-page="review">Review</a>
         <a href="#/campaign/settings" data-page="settings">Settings</a>
+        <a href="#/campaign/exports" data-page="exports">Exports</a>
       </nav>
 
       <main class="main">
@@ -56,6 +56,11 @@
             </div>
             <form id="newCampaignForm" class="new-campaign-form">
               <input type="text" id="campName" required placeholder="Campaign name" autocomplete="off">
+              <label class="brief-attach" id="briefAttach" for="campBriefInput"
+                     title="Attach the creator brief (pdf · docx · txt · md)">
+                <input type="file" id="campBriefInput" accept=".pdf,.docx,.txt,.md" hidden>
+                <span class="brief-attach-label" id="briefAttachLabel">＋ Brief</span>
+              </label>
               <button class="btn btn-primary" type="submit" id="btnCreateCampaign">New campaign</button>
             </form>
           </div>
@@ -68,11 +73,8 @@
               <h2 id="campDetailName">Campaign</h2>
               <p class="page-sub" id="campDetailMeta"></p>
             </div>
-            <div class="page-actions">
-              <button class="btn btn-ghost btn-small btn-danger" id="btnDeleteCampaign">Delete campaign</button>
-              <button class="btn btn-primary" id="btnAddSources">Add sources</button>
-            </div>
           </div>
+
           <div class="panel highlight-toggle-panel">
             <span class="field-label">Highlight selection</span>
             <div class="seg-toggle" id="highlightToggle" role="radiogroup" aria-label="Highlight selection">
@@ -81,54 +83,64 @@
             </div>
             <p class="hint" id="highlightToggleHint"></p>
           </div>
-          <ol class="funnel" id="funnel"></ol>
-          <p class="empty" id="overviewEmpty" hidden>Add a source to start this campaign.</p>
-        </section>
 
-        <section class="page" id="page-sources" hidden>
-          <div class="page-head">
-            <div>
-              <h2>Sources</h2>
-              <p class="page-sub">Long-form interviews for this campaign.</p>
-            </div>
-          </div>
-          <div class="grid-2">
-            <div class="panel">
-              <h3 class="eyebrow">Library</h3>
-              <div class="source-list" id="sourceList"></div>
-            </div>
-            <div class="panel">
-              <h3 class="eyebrow">Add sources</h3>
-              <label class="dropzone" id="uploadBtn" for="fileInput">
-                <span class="drop-icon">＋</span>
-                <span class="drop-title">Drop a video</span>
-                <span class="drop-sub">mp4 · mov · mkv · webm</span>
-              </label>
-              <input type="file" id="fileInput" accept="video/*" hidden>
-              <div class="upload-progress" id="uploadProgress" hidden>
-                <div class="upload-track"><div class="upload-fill" id="uploadFill"></div></div>
-                <span class="upload-pct" id="uploadPct">0%</span>
+          <div class="panel overview-rules-panel">
+            <div class="section-head">
+              <h3 class="eyebrow">Campaign brief & rules</h3>
+              <div class="overview-rules-actions">
+                <a class="link" id="ovRulesViewFull" href="#" target="_blank" rel="noopener" hidden>Full doc</a>
+                <label class="link reupload-link" for="ovRulesInput" id="ovRulesUploadLbl" hidden>Upload brief</label>
               </div>
             </div>
-          </div>
-        </section>
-
-        <section class="page" id="page-approval" hidden>
-          <div class="page-head">
-            <div>
-              <h2>Approval <span class="count" id="approvalCount"></span></h2>
-              <p class="page-sub">Transcripts sent — approve the highlights before clipping starts.</p>
+            <div id="ovRulesEmpty">
+              <p class="hint">No brief yet — the rules doc steers what Gemma picks: content criteria, brand safety, editing style, submission requirements.</p>
+              <label class="dropzone dropzone-small" id="ovRulesDropzone" for="ovRulesInput">
+                <span class="drop-icon">＋</span>
+                <span class="drop-title">Attach the brief</span>
+                <span class="drop-sub">pdf · docx · txt · md</span>
+              </label>
+              <input type="file" id="ovRulesInput" accept=".pdf,.docx,.txt,.md" hidden>
             </div>
-            <button class="btn btn-small btn-ghost" id="btnEmailCheck">Check inbox now</button>
+            <div id="ovRulesBody" hidden></div>
           </div>
-          <div id="approvalList" class="source-groups"></div>
-          <div class="empty" id="approvalEmpty" hidden>Analyze a source in email mode to start the transcript → highlights flow.</div>
+
+          <div class="panel overview-knobs-panel">
+            <h3 class="eyebrow">Analyze</h3>
+            <div class="analyze-fields">
+              <label class="field"><span>Min score</span>
+                <input type="number" id="minScore" step="0.05" min="0" max="1"></label>
+              <label class="field"><span>Max clips</span>
+                <input type="number" id="maxClips" step="1" min="1" max="30"></label>
+            </div>
+          </div>
+
+          <div class="funnel-strip" id="funnelStrip"></div>
+
+          <div class="panel source-board-panel">
+            <div class="section-head">
+              <h3 class="eyebrow">Sources</h3>
+              <label class="btn btn-small btn-ghost" for="fileInput">＋ Add source</label>
+            </div>
+            <div class="source-board" id="sourceBoard"></div>
+            <label class="dropzone source-dropzone" id="uploadBtn" for="fileInput">
+              <span class="drop-icon">＋</span>
+              <span class="drop-title" id="uploadDropTitle">Drop a video to start this campaign</span>
+              <span class="drop-sub">mp4 · mov · mkv · webm</span>
+            </label>
+            <input type="file" id="fileInput" accept="video/*" hidden>
+            <div class="upload-progress" id="uploadProgress" hidden>
+              <div class="upload-track"><div class="upload-fill" id="uploadFill"></div></div>
+              <span class="upload-pct" id="uploadPct">0%</span>
+            </div>
+          </div>
+
+          <p class="empty" id="overviewEmpty" hidden>Drop a video to start this campaign.</p>
         </section>
 
-        <section class="page" id="page-candidates" hidden>
+        <section class="page" id="page-review" hidden>
           <div class="page-head">
             <div>
-              <h2>Candidates <span class="count" id="reviewCount"></span></h2>
+              <h2>Review <span class="count" id="reviewCount"></span></h2>
               <p class="page-sub">Approve the cuts worth posting.</p>
             </div>
             <div class="page-actions">
@@ -139,17 +151,6 @@
           <p class="hint" id="reviewHint">Decisions stay unsaved until you press Save decisions.</p>
           <div id="reviewList" class="source-groups"></div>
           <div class="empty" id="reviewEmpty" hidden>Analyze a source to get candidates.</div>
-        </section>
-
-        <section class="page" id="page-approved" hidden>
-          <div class="page-head">
-            <div>
-              <h2>Approved <span class="count" id="approvedCount"></span></h2>
-              <p class="page-sub">Ready to render.</p>
-            </div>
-          </div>
-          <div id="approvedList" class="source-groups"></div>
-          <div class="empty" id="approvedEmpty" hidden>Approve candidates, then export them here.</div>
         </section>
 
         <section class="page" id="page-exports" hidden>
@@ -183,62 +184,46 @@
           <div class="page-head">
             <div>
               <h2>Settings</h2>
-              <p class="page-sub">Brief, style, music, and run knobs for this campaign.</p>
+              <p class="page-sub">Style, music, and edit knobs for this campaign.</p>
             </div>
           </div>
 
-          <div class="panel" id="rulesPanel">
-            <h3 class="eyebrow">Brief</h3>
-            <div id="rulesEmpty">
-              <label class="dropzone" id="rulesDropzone" for="rulesInput">
-                <span class="drop-icon">＋</span>
-                <span class="drop-title">Upload the creator brief</span>
-                <span class="drop-sub">pdf · docx · txt — sorted into criteria, brand safety, style, and submission</span>
+          <div class="panel" id="settingsExportPanel">
+            <div class="section-head">
+              <h3 class="eyebrow">Export</h3>
+            </div>
+            <p class="hint">Approved clips from the Review page, rendered with the golden look selected below. Pick a source and start the export.</p>
+            <div class="explore-controls">
+              <label class="field"><span>Video</span>
+                <div class="select-wrap"><select id="settingsExportSelect"></select></div>
               </label>
-              <input type="file" id="rulesInput" accept=".pdf,.docx,.txt,.md" hidden>
+              <button class="btn btn-primary" id="btnSettingsExport" disabled>Export approved</button>
             </div>
-            <div id="rulesFilled" hidden>
-              <div id="rulesSections"></div>
-              <div class="rules-actions">
-                <a class="link" id="btnViewFullRules" href="#" target="_blank" rel="noopener" hidden>View full doc</a>
-                <label class="link reupload-link" for="rulesInput">Replace brief</label>
-              </div>
-            </div>
+            <p class="hint" id="settingsExportHint">Nothing approved yet — approve clips on the Review page first.</p>
           </div>
 
-          <div class="grid-2 settings-grid">
-            <div class="panel">
-              <h3 class="eyebrow">Style</h3>
-              <p class="field-label">Golden look</p>
-              <div class="golden-styles" id="goldenStyles"></div>
-              <select id="templateSelect" hidden></select>
-              <p class="template-desc" id="templateDesc"></p>
-              <div class="analyze-fields">
-                <label class="field"><span>Min score</span>
-                  <input type="number" id="minScore" step="0.05" min="0" max="1"></label>
-                <label class="field"><span>Max clips</span>
-                  <input type="number" id="maxClips" step="1" min="1" max="30"></label>
-              </div>
-              <label class="toggle-row" style="margin-top:10px">
-                <input type="checkbox" id="localHighlights" checked>
-                <span>Local highlight selection (Ollama) &mdash; off: e-mail the transcript and use the AI reply</span>
-              </label>
-            </div>
-            <div class="panel">
-              <h3 class="eyebrow">Sound</h3>
-              <label class="toggle-row">
-                <input type="checkbox" id="musicEnabled">
-                <span>Mix background music under the voice</span>
-              </label>
-              <label class="field"><span>Volume</span>
-                <input type="range" id="musicVolume" min="0" max="1" step="0.02"></label>
-              <label class="field-label">Track</label>
-              <div class="select-wrap music-track-wrap"><select id="musicTrack"></select></div>
-              <label class="upload upload-small" for="musicInput">
-                <span class="upload-icon">＋</span><span>Add a track</span>
-              </label>
-              <input type="file" id="musicInput" accept="audio/*" hidden>
-            </div>
+          <div class="panel">
+            <h3 class="eyebrow">Style</h3>
+            <p class="field-label">Golden look</p>
+            <div class="golden-styles" id="goldenStyles"></div>
+            <select id="templateSelect" hidden></select>
+            <p class="template-desc" id="templateDesc"></p>
+          </div>
+
+          <div class="panel">
+            <h3 class="eyebrow">Sound</h3>
+            <label class="toggle-row">
+              <input type="checkbox" id="musicEnabled">
+              <span>Mix background music under the voice</span>
+            </label>
+            <label class="field"><span>Volume</span>
+              <input type="range" id="musicVolume" min="0" max="1" step="0.02"></label>
+            <label class="field-label">Track</label>
+            <div class="select-wrap music-track-wrap"><select id="musicTrack"></select></div>
+            <label class="upload upload-small" for="musicInput">
+              <span class="upload-icon">＋</span><span>Add a track</span>
+            </label>
+            <input type="file" id="musicInput" accept="audio/*" hidden>
           </div>
 
           <details class="style-lab" id="styleLab">
@@ -293,10 +278,17 @@
             <p class="hint">Optional free-text style direction (e.g. “no red, warm cinematic look, big bold captions”). It steers the variant generator and is passed to the vision-judge rubric for every preview.</p>
             <textarea id="styleBrief" class="field" rows="3" placeholder="e.g. no red, warm cinematic look…"></textarea>
             <p class="hint">Requires the vision model: <code>ollama pull qwen2.5vl:7b</code>. Exploring runs on the Exports page.</p>
+            <p class="hint" id="telegramStatus"></p>
             <div class="settings-divider"></div>
             <h3 class="eyebrow">Edit instructions</h3>
             <p class="hint">Per-clip edit direction shown and confirmed before every generation run. Logged at export time and used as the style-explorer brief when no brief is set.</p>
             <textarea id="editInstructions" class="field" rows="3" placeholder="e.g. keep captions small, hard cuts on emphasis words…"></textarea>
+          </div>
+
+          <div class="panel danger-zone">
+            <h3 class="eyebrow danger">Danger zone</h3>
+            <p class="hint">Permanently delete this campaign and all its files. This cannot be undone.</p>
+            <button class="btn btn-small btn-ghost btn-danger" id="btnDeleteCampaign">Delete campaign</button>
           </div>
         </section>
       </main>
@@ -322,6 +314,13 @@
         <button class="link modal-close" id="transcriptClose">✕ Close</button>
       </div>
       <pre class="transcript-body" id="transcriptBody">Loading…</pre>
+      <div class="modal-actions">
+        <button class="btn btn-small btn-ghost" id="transcriptCopy"
+                title="Copy the full transcript to your clipboard">Copy</button>
+        <span class="modal-spacer"></span>
+        <button class="btn btn-small btn-primary" id="transcriptFind"
+                title="Run highlight selection on this transcript — no re-transcription">Find highlights</button>
+      </div>
     </div>
   </div>
 
@@ -349,6 +348,6 @@
 
   <div class="toast" id="toast" hidden></div>
 
-  <script src="/static/app.js?v=17"></script>
+  <script src="/static/app.js?v=24"></script>
 </body>
 </html>

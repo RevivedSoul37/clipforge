@@ -47,6 +47,46 @@ email instead of the local model:
 The CLI equivalents are `python main.py select --email <video>` and
 `python main.py check-email`.
 
+## Telegram notifications
+
+Pipeline events are mirrored to a Telegram chat (web bell and desktop
+notifications keep working in parallel). Zero extra dependencies — the Bot
+API is called with urllib.
+
+Setup:
+
+1. Message **@BotFather** on Telegram, `/newbot`, copy the token into `.env`
+   as `TELEGRAM_BOT_TOKEN`.
+2. Send your bot any message (`/start`), then run:
+
+       python main.py telegram-setup
+
+   It lists recent chats with their chat id — copy yours into `.env` as
+   `TELEGRAM_CHAT_ID`. Group/channel ids are negative (e.g. `-100…`); the
+   bot must be a member there.
+3. Verify: `python main.py telegram-test`.
+
+Events delivered (all tolerant of missing fields, HTML-escaped):
+
+| event | meaning |
+|---|---|
+| `run_started` | a web run began (mode + video) |
+| `run_ok` | a run finished (winner style shown for explore results) |
+| `run_error` | a run failed, error tail (≤300 chars) included |
+| `run_cancelled` | a run was cancelled |
+| `awaiting_highlights` | transcript emailed, waiting for the AI reply |
+| `highlights_received` | highlight reply ingested (clip count) |
+| `export_done` | export finished (clip count + names, ≤5 shown) |
+| `explore_done` | style exploration finished (winner + total score) |
+| `upload_done` | source video uploaded (name + size) |
+| `campaign_created` | campaign created |
+
+Master toggle: `"telegram": {"enabled": false}` in `config.json` silences
+everything. Missing token/chat id degrades to one startup warning — never a
+crash. Delivery is non-blocking (queue + daemon thread); failures are
+swallowed with a single `[notify] telegram send failed: …` log line. The
+token never appears in logs, API responses or the UI.
+
 ## Style Lab — clone an editing style from reference clips
 
 Turn edits you like into reusable templates:

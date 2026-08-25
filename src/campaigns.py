@@ -545,11 +545,15 @@ def extract_rules_text(path: Path) -> str:
     raise ValueError(f"unsupported rules file type: {ext}")
 
 
-def summarize_rules(text: str) -> dict:
-    """Condense a long brief into the four-section rules object."""
+def summarize_rules(text: str) -> tuple:
+    """Condense a long brief into the four-section rules object.
+
+    Returns (rules_dict, warning); warning is None on success or a short
+    human-readable string when the LLM condense failed and we fell back.
+    """
     body = (text or "").strip()
     if not body:
-        return empty_rules()
+        return empty_rules(), None
     messages = [
         {"role": "system", "content": SUMMARIZE_SYSTEM},
         {"role": "user", "content": body[:24000]},
@@ -559,10 +563,13 @@ def summarize_rules(text: str) -> dict:
         parsed = json.loads(result) if isinstance(result, str) else result
         if isinstance(parsed, str):
             parsed = json.loads(parsed)
-        return normalize_rules(parsed)
+        return normalize_rules(parsed), None
     except Exception as exc:  # noqa: BLE001
         print(f"[campaigns] summarization failed: {exc}", flush=True)
-        return normalize_rules({"content_criteria": _lines_to_list(body)[:15]})
+        rules = normalize_rules({"content_criteria": _lines_to_list(body)[:15]})
+        warning = ("Brief could not be condensed by the LLM; used the first " 
+                   "lines as criteria. Check Ollama.")
+        return rules, warning
 
 
 def save_rules_upload(camp: Campaign, filename: str, data: bytes) -> Path:

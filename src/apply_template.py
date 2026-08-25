@@ -9,15 +9,22 @@ outline + optional keyword highlight. intro/outro/watermark are defined in the
 template schema but disabled in v1 (they raise a clear error if enabled).
 """
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
 
 from src.config import config
+from src import text_layout as tl
 
 TEMPLATE_DIR = config.root / "templates"
 FONT_DIR = config.root / "assets" / "fonts"
 AUDIO_EXTS = (".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac")
+
+# Debug flag: set CLIPFORGE_LAYOUT_DEBUG=1 (or pass debug=True to
+# apply_template) to render a debug overlay frame alongside the clip showing
+# safe zones, bounding boxes, subject region and calculated coordinates.
+_LAYOUT_DEBUG = bool(os.environ.get("CLIPFORGE_LAYOUT_DEBUG", "").strip())
 
 # Programmatic color/lighting presets (template "effects" block). Values are
 # kept conservative so they read as grades, not distortions.
@@ -178,8 +185,47 @@ def _alignment(position, default):
             "bottom_center": 2, "top_center": 8}.get(position, default)
 
 
+def _template_safe_area(template, band_offset=0, band_height=None):
+    """Build a text_layout.SafeArea for a template, lifting the top/bottom by
+    the black-bar offset so text stays inside the visible video band for
+    letterbox/square_band crops."""
+    safe = tl.SafeArea()
+    top = safe.top
+    bottom = safe.bottom
+    cap_anchor = str((template.get("captions") or {}).get("anchor", "frame"))
+    hook_anchor = str((template.get("hook") or {}).get("anchor", "frame"))
+    if band_height is not None:
+        if cap_anchor == "band":
+            bottom = max(bottom, tl.CANVAS_H - band_offset - band_height + 40)
+        if hook_anchor == "band":
+            top = max(top, band_offset + 20)
+    safe.top = top
+    safe.bottom = bottom
+    return safe
+
+
+def _caption_line_strings(lines):
+    """Flat list of plain caption line strings (for layout representative text)."""
+    out = []
+    for line in lines:
+        out.append(" ".join(w["word"] for w in line))
+    return out
+
+
 def _build_ass(lines, template, resx, resy, clip_duration, hook_text=None,
-               band_offset=0, band_height=None):
+               band_offset=0, band_height=None, debug=False, subject=None):
+    """Render the ASS subtitle file for a clip using the centralized layout
+    engine.
+
+    PlayResX/PlayResY is pinned to the CANONICAL 1080x1920 space (NOT the
+    actual render resolution) so libass scales subtitles uniformly and the
+    low-res Style Explorer preview shares the exact same layout as the
+    full-quality export. Every element is positioned with an explicit \\pos +
+    \\an tag produced by text_layout.layout_template; no component invents its
+    own coordinates. Duplicate element ids are rejected.
+
+    `subject` is an optional BoundingBox (canvas space) for the detected
+    face/subject; the layout engine penalizes text over it."""
     caps = template.get("captions", {})
     font, bold = _parse_font(caps.get("font", "Arial"))
     size = int(caps.get("size", 64))
@@ -189,20 +235,6 @@ def _build_ass(lines, template, resx, resy, clip_duration, hook_text=None,
     highlight = caps.get("highlight_keyword", {})
     hl_enabled = bool(highlight.get("enabled"))
     hl_color = _hex_to_bgr(highlight.get("color", "#2DE1C2"))
-    cap_align = _alignment(caps.get("position", "bottom_center"), 2)
-    if "margin_v" in caps:
-        margin_v = int(caps["margin_v"])
-    elif cap_align == 2 and "9:16" in template["output"]["aspect_ratio"]:
-        # Union of TikTok / Reels / Shorts UI chrome (~250px from bottom
-        # on 1080x1920) so one 9:16 file is postable everywhere.
-        margin_v = 250
-    else:
-        margin_v = 80
-    # captions anchor to the video band bottom when banded (margin_v counts
-    # from the frame bottom, so lift by the lower black bar height)
-    cap_anchor = str(caps.get("anchor", "frame"))
-    if cap_anchor == "band" and band_height is not None:
-        margin_v += max(0, resy - band_offset - band_height)
 
     grad = caps.get("gradient", {}) or {}
     grad_enabled = bool(grad.get("enabled"))
@@ -213,43 +245,72 @@ def _build_ass(lines, template, resx, resy, clip_duration, hook_text=None,
 
     hook = template.get("hook", {})
     hook_enabled = bool(hook.get("enabled")) and bool(hook_text)
-    h_font, h_bold = _parse_font(hook.get("font", "Arial"))
-    h_size = int(hook.get("size", 72))
-    h_color = _hex_to_bgr(hook.get("color", "#F1EFD5"))
-    h_align = _alignment(hook.get("position", "top"), 8)
-    h_margin_v = int(hook.get("margin_v", 180))
-    # anchors to the video band top when letterboxed/square-banded
-    h_anchor = str(hook.get("anchor", "frame"))
-    if h_anchor == "band" and band_offset:
-        h_margin_v += band_offset
-
     cta = template.get("cta", {}) or {}
     cta_enabled = bool(cta.get("enabled")) and bool(cta.get("text"))
-    c_font, c_bold = _parse_font(cta.get("font", "Arial"))
-    c_size = int(cta.get("size", 48))
-    c_color = _hex_to_bgr(cta.get("color", "#E00000"))
-    c_align = _alignment(cta.get("position", "bottom"), 2)
-    c_margin_v = int(cta.get("margin_v", 120))
-    # anchors to the video band bottom when letterboxed/square-banded
-    c_anchor = str(cta.get("anchor", "frame"))
-    if c_anchor == "band" and band_height is not None:
-        c_margin_v += (resy - band_offset - band_height)
+    cta_text = cta.get("text") if cta_enabled else None
 
-    styles = [f"Style: Caption,{font},{size},{primary},&H00FFFFFF,{outline_color},"
-              f"&H80000000,{bold},0,0,0,100,100,0,0,1,{outline},1,{cap_align},40,40,{margin_v},1"]
+    # --- layout engine: one source of truth for x/y/font-size ---------------
+    cap_strings = _caption_line_strings(lines) if caps.get("enabled") else []
+    safe = _template_safe_area(template, band_offset, band_height)
+    elements = tl.elements_from_template(template, hook_text,
+                                          cap_strings, cta_text)
+    # propagate template-derived font sizing constraints into the layout styles
+    for el in elements:
+        if el.type is tl.TextType.CAPTION:
+            el.style.font = font
+            el.style.font_size = size
+            el.style.outline_width = outline
+            if caps.get("max_lines"):
+                el.style.max_lines = int(caps["max_lines"])
+            if caps.get("max_words") and not caps.get("max_lines"):
+                el.style.max_lines = int(caps["max_words"])
+        elif el.type is tl.TextType.HOOK:
+            el.style.font, _ = _parse_font(hook.get("font", "Bebas Neue"))
+            el.style.font_size = int(hook.get("size", 96))
+            el.style.alignment = hook.get("position", "top")
+        elif el.type is tl.TextType.CTA:
+            el.style.font, _ = _parse_font(cta.get("font", "Poppins-Bold"))
+            el.style.font_size = int(cta.get("size", 48))
+            el.style.alignment = cta.get("position", "bottom")
+
+    layouts = tl.layout_frame(elements, tl.CANVAS_W, tl.CANVAS_H, safe,
+                              subject=subject)
+    by_id = {r.element_id: r for r in layouts if r is not None}
+    # reject duplicate ids (defense in depth — layout_frame already orders)
+    if len(by_id) != len([r for r in layouts if r is not None]):
+        raise RuntimeError("duplicate text element ids in layout")
+
+    # --- ASS styles (colors/stroke only; positioning is per-dialogue) -------
+    cap_style = next((r for r in layouts if r and r.type is tl.TextType.CAPTION), None)
+    cap_size = cap_style.font_size if cap_style else size
+    cap_an = cap_style.alignment if cap_style else 2
+    hook_style = next((r for r in layouts if r and r.type is tl.TextType.HOOK), None)
+    hook_size = hook_style.font_size if hook_style else int(hook.get("size", 96))
+    hook_an = hook_style.alignment if hook_style else 8
+    cta_style = next((r for r in layouts if r and r.type is tl.TextType.CTA), None)
+    cta_size = cta_style.font_size if cta_style else int(cta.get("size", 48))
+    cta_an = cta_style.alignment if cta_style else 2
+
+    styles = [f"Style: Caption,{font},{cap_size},{primary},&H00FFFFFF,{outline_color},"
+              f"&H80000000,{bold},0,0,0,100,100,0,0,1,{outline},1,{cap_an},0,0,0,1"]
     if hook_enabled:
+        h_font_name, h_bold = _parse_font(hook.get("font", "Bebas Neue"))
+        h_color = _hex_to_bgr(hook.get("color", "#F1EFD5"))
         styles.append(
-            f"Style: Hook,{h_font},{h_size},{h_color},&H00FFFFFF,&H00000000,&H00000000,"
-            f"{h_bold},0,0,0,100,100,0,0,1,0,0,{h_align},80,80,{h_margin_v},1")
+            f"Style: Hook,{h_font_name},{hook_size},{h_color},&H00FFFFFF,&H00000000,&H00000000,"
+            f"{h_bold},0,0,0,100,100,0,0,1,0,0,{hook_an},0,0,0,1")
     if cta_enabled:
+        c_font_name, c_bold = _parse_font(cta.get("font", "Poppins-Bold"))
+        c_color = _hex_to_bgr(cta.get("color", "#E00000"))
         styles.append(
-            f"Style: Cta,{c_font},{c_size},{c_color},&H00FFFFFF,&H00000000,&H00000000,"
-            f"{c_bold},0,0,0,100,100,0,0,1,1,1,{c_align},80,80,{c_margin_v},1")
+            f"Style: Cta,{c_font_name},{cta_size},{c_color},&H00FFFFFF,&H00000000,&H00000000,"
+            f"{c_bold},0,0,0,100,100,0,0,1,1,1,{cta_an},0,0,0,1")
 
+    # PlayRes is ALWAYS canonical so preview and final share one layout model.
     header = f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: {resx}
-PlayResY: {resy}
+PlayResX: {tl.CANVAS_W}
+PlayResY: {tl.CANVAS_H}
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
@@ -260,14 +321,22 @@ Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour,
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events = []
-    if hook_enabled:
+    if hook_enabled and "hook_001" in by_id:
+        r = by_id["hook_001"]
         events.append(
             f"Dialogue: 1,0:00:00.00,{_ass_time(clip_duration)},Hook,,0,0,0,,"
+            f"{{\\an{r.alignment}\\pos({r.anchor_x},{r.anchor_y})}}"
             f"{_ass_escape(hook_text)}")
-    if cta_enabled:
+    if cta_enabled and "cta_001" in by_id:
+        r = by_id["cta_001"]
         events.append(
             f"Dialogue: 1,0:00:00.00,{_ass_time(clip_duration)},Cta,,0,0,0,,"
+            f"{{\\an{r.alignment}\\pos({r.anchor_x},{r.anchor_y})}}"
             f"{_ass_escape(cta['text'])}")
+    cap_pos = None
+    if "caption_001" in by_id:
+        cr = by_id["caption_001"]
+        cap_pos = f"{{\\an{cr.alignment}\\pos({cr.anchor_x},{cr.anchor_y})}}"
     for line in lines:
         start = _ass_time(line[0]["start"])
         end = _ass_time(line[-1]["end"])
@@ -291,7 +360,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             text = " ".join(parts)
         else:
             text = " ".join(_ass_escape(w["word"]) for w in line)
-        events.append(f"Dialogue: 0,{start},{end},Caption,,0,0,0,,{text}")
+        pos = cap_pos or ""
+        events.append(f"Dialogue: 0,{start},{end},Caption,,0,0,0,,{pos}{text}")
+
+    if debug:
+        try:
+            tl.render_debug_overlay(layouts, tl.CANVAS_W, tl.CANVAS_H, safe)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[template] debug overlay failed: {exc}")
     return header + "\n".join(events) + "\n"
 
 
@@ -413,7 +489,9 @@ def _broll_graph(filters, cues, ass_filter, resx, resy, template):
 
 def apply_template(raw_clip_path, transcript_path, clip_start, clip_end,
                    template_name=None, output_dir=None, hook_text=None,
-                   broll_cues=None, template=None, out_name=None, preview=None):
+                   broll_cues=None, template=None, out_name=None, preview=None,
+                   debug=None):
+    debug = _LAYOUT_DEBUG if debug is None else bool(debug)
     raw_clip_path = Path(raw_clip_path)
     transcript_path = Path(transcript_path)
     if not raw_clip_path.exists():
@@ -461,9 +539,22 @@ def apply_template(raw_clip_path, transcript_path, clip_start, clip_end,
         cta_on = bool(template.get("cta", {}).get("enabled")) and \
             bool(template.get("cta", {}).get("text"))
         if lines or hook_on or cta_on:
+            # detect subject (face) region so the layout engine can route
+            # text around it. Best-effort: missing mediapipe/opencv degrades
+            # to None (no subject penalty) and never blocks the render.
+            subject = None
+            try:
+                from src.video_reframer import subject_box
+                sb = subject_box(raw_clip_path, w, h, resx, resy)
+                if sb is not None:
+                    subject = tl.BoundingBox(sb.x, sb.y, sb.width, sb.height)
+            except Exception as exc:  # noqa: BLE001
+                if debug:
+                    print(f"[template] subject detection skipped: {exc}")
             ass_text = _build_ass(lines, template, resx, resy, clip_duration,
                                   hook_text=hook_text if hook_on else None,
-                                  band_offset=band_offset, band_height=band_height)
+                                  band_offset=band_offset, band_height=band_height,
+                                  debug=debug, subject=subject)
             ass_path = tmp / "captions.ass"
             ass_path.write_text(ass_text, encoding="utf-8")
             sub_opts = "captions.ass"
